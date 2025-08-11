@@ -46,40 +46,44 @@ jobs:
       - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
-          git fetch upstream
+          git fetch upstream --tags
 
-      - name: Check for updates
+      - name: Get latest upstream release tag
+        id: latest-release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const rel = await github.rest.repos.getLatestRelease({ owner: 'langgenius', repo: 'dify' });
+            core.setOutput('tag', rel.data.tag_name);
+
+      - name: Export release tag to env
+        run: |
+          echo "UPSTREAM_RELEASE_TAG=${{ steps.latest-release.outputs.tag }}" >> $GITHUB_ENV
+
+      - name: Check for updates (latest release)
         id: check-updates
         run: |
-          UPSTREAM_COMMIT=$(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})
-          CURRENT_COMMIT=$(git rev-parse HEAD)
-          
-          if [ "$UPSTREAM_COMMIT" = "$CURRENT_COMMIT" ] && [ "${{ github.event.inputs.force_sync }}" != "true" ]; then
+          echo "Latest upstream release: $UPSTREAM_RELEASE_TAG"
+          if [ -f LAST_UPSTREAM_RELEASE ]; then
+            PREV_TAG=$(cat LAST_UPSTREAM_RELEASE)
+          else
+            PREV_TAG=""
+          fi
+          if [ "$PREV_TAG" = "$UPSTREAM_RELEASE_TAG" ] && [ "${{ github.event.inputs.force_sync }}" != "true" ]; then
             echo "updates=false" >> $GITHUB_OUTPUT
-            echo "No updates available from upstream"
+            echo "Already at latest upstream release $UPSTREAM_RELEASE_TAG"
           else
             echo "updates=true" >> $GITHUB_OUTPUT
-            echo "Updates available from upstream or force sync requested"
-            echo "Current: $CURRENT_COMMIT"
-            echo "Upstream: $UPSTREAM_COMMIT"
+            echo "Will update from '$PREV_TAG' to '$UPSTREAM_RELEASE_TAG'"
           fi
 
-      - name: Sync from upstream
+      - name: Prepare workspace
         if: steps.check-updates.outputs.updates == 'true'
         run: |
           # 保存当前的补丁和配置文件
-          cp dify-keycloak.diff /tmp/
-          cp docker-compose.yaml /tmp/
-          cp -r keycloak/ /tmp/
-          
-          # 重置到上游状态
-          git reset --hard upstream/${{ env.UPSTREAM_BRANCH }}
-          git clean -fd
-          
-          # 恢复补丁和配置文件
-          cp /tmp/dify-keycloak.diff ./
-          cp /tmp/docker-compose.yaml ./
-          cp -r /tmp/keycloak/ ./
+          cp dify-keycloak.diff /tmp/ || true
+          cp docker-compose.yaml /tmp/ || true
+          cp -r keycloak/ /tmp/ || true
 
       - name: Apply Keycloak patch
         if: steps.check-updates.outputs.updates == 'true'
@@ -87,7 +91,7 @@ jobs:
           cd /tmp
           git clone https://github.com/${{ env.UPSTREAM_REPO }}.git upstream-dify
           cd upstream-dify
-          git checkout ${{ env.UPSTREAM_BRANCH }}
+          git checkout tags/${{ env.UPSTREAM_RELEASE_TAG }} -b release-build
           
           # 应用补丁
           if git apply /tmp/dify-keycloak.diff; then
@@ -138,9 +142,7 @@ jobs:
           platforms: ${{ env.DOCKER_PLATFORMS }}
           push: true
           tags: |
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ github.sha }}
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:v${{ github.run_number }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ env.UPSTREAM_RELEASE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -154,9 +156,7 @@ jobs:
           platforms: ${{ env.DOCKER_PLATFORMS }}
           push: true
           tags: |
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:${{ github.sha }}
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:v${{ github.run_number }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:${{ env.UPSTREAM_RELEASE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -170,9 +170,7 @@ jobs:
           platforms: ${{ env.DOCKER_PLATFORMS }}
           push: true
           tags: |
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ github.sha }}
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:v${{ github.run_number }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ env.UPSTREAM_RELEASE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -202,8 +200,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ github.run_number }}
-          release_name: Dify Enterprise SSO - Run ${{ github.run_number }}
+          tag_name: ${{ env.UPSTREAM_RELEASE_TAG }}
+          release_name: Dify Enterprise SSO - ${{ env.UPSTREAM_RELEASE_TAG }}
           body: |
             ## 🚀 Dify Enterprise SSO Release
             
