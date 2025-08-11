@@ -119,21 +119,14 @@ jobs:
           fi
           
           # 复制修改后的文件
-          cp -r api/ /tmp/
-          cp -r web/ /tmp/
-          cd ..
-          cp -r /tmp/upstream-dify/api/ ./
-          cp -r /tmp/upstream-dify/web/ ./
+          echo "UPSTREAM_SRC=/tmp/upstream-dify" >> $GITHUB_ENV
 
-      - name: Update docker-compose.yaml
+      - name: Update upstream source with patch
         if: steps.check-updates.outputs.updates == 'true'
         run: |
-          # 确保docker-compose.yaml包含Keycloak相关的环境变量
-          if ! grep -q "KEYCLOAK_CLIENT_ID" docker-compose.yaml; then
-            echo "Adding Keycloak environment variables to docker-compose.yaml..."
-            # 在适当位置添加Keycloak环境变量
-            sed -i '/# OAuth2\/SSO Configuration/a\  KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-}\n  KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}\n  KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL:-}' docker-compose.yaml
-          fi
+          # 将补丁应用到 /tmp/upstream-dify 源码
+          cd $UPSTREAM_SRC
+          git apply /tmp/dify-keycloak.diff
 
       - name: Setup Docker Buildx
         if: steps.check-updates.outputs.updates == 'true'
@@ -153,7 +146,7 @@ jobs:
         if: steps.check-updates.outputs.updates == 'true'
         uses: docker/build-push-action@v5
         with:
-          context: ./api
+          context: ${{ env.UPSTREAM_SRC }}/api
           platforms: ${{ env.BUILD_PLATFORMS }}
           push: true
           tags: |
@@ -173,7 +166,7 @@ jobs:
         if: steps.check-updates.outputs.updates == 'true'
         uses: docker/build-push-action@v5
         with:
-          context: ./web
+          context: ${{ env.UPSTREAM_SRC }}/web
           platforms: ${{ env.BUILD_PLATFORMS }}
           push: true
           tags: |
@@ -193,7 +186,7 @@ jobs:
         if: steps.check-updates.outputs.updates == 'true'
         uses: docker/build-push-action@v5
         with:
-          context: ./api
+          context: ${{ env.UPSTREAM_SRC }}/api
           platforms: ${{ env.BUILD_PLATFORMS }}
           push: true
           tags: |
