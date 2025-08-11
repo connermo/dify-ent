@@ -1,0 +1,339 @@
+name: Sync Dify from Upstream and Build Images
+
+on:
+  schedule:
+    # 每天凌晨2点运行
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    # 允许手动触发
+    inputs:
+      force_sync:
+        description: 'Force sync even if no updates'
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/sync-dify.yml'
+      - 'dify-keycloak.diff'
+      - 'docker-compose.yaml'
+
+env:
+  UPSTREAM_REPO: langgenius/dify
+  UPSTREAM_BRANCH: main
+  DOCKER_REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/dify
+  DOCKER_PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+          git fetch upstream
+
+      - name: Check for updates
+        id: check-updates
+        run: |
+          UPSTREAM_COMMIT=$(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          
+          if [ "$UPSTREAM_COMMIT" = "$CURRENT_COMMIT" ] && [ "${{ github.event.inputs.force_sync }}" != "true" ]; then
+            echo "updates=false" >> $GITHUB_OUTPUT
+            echo "No updates available from upstream"
+          else
+            echo "updates=true" >> $GITHUB_OUTPUT
+            echo "Updates available from upstream or force sync requested"
+            echo "Current: $CURRENT_COMMIT"
+            echo "Upstream: $UPSTREAM_COMMIT"
+          fi
+
+      - name: Sync from upstream
+        if: steps.check-updates.outputs.updates == 'true'
+        run: |
+          # 保存当前的补丁和配置文件
+          cp dify-keycloak.diff /tmp/
+          cp docker-compose.yaml /tmp/
+          cp -r keycloak/ /tmp/
+          
+          # 重置到上游状态
+          git reset --hard upstream/${{ env.UPSTREAM_BRANCH }}
+          git clean -fd
+          
+          # 恢复补丁和配置文件
+          cp /tmp/dify-keycloak.diff ./
+          cp /tmp/docker-compose.yaml ./
+          cp -r /tmp/keycloak/ ./
+
+      - name: Apply Keycloak patch
+        if: steps.check-updates.outputs.updates == 'true'
+        run: |
+          cd /tmp
+          git clone https://github.com/${{ env.UPSTREAM_REPO }}.git upstream-dify
+          cd upstream-dify
+          git checkout ${{ env.UPSTREAM_BRANCH }}
+          
+          # 应用补丁
+          if git apply /tmp/dify-keycloak.diff; then
+            echo "Patch applied successfully"
+          else
+            echo "Patch failed to apply, checking for conflicts..."
+            git apply --check /tmp/dify-keycloak.diff || true
+            echo "Patch application failed. Please review the changes manually."
+            exit 1
+          fi
+          
+          # 复制修改后的文件
+          cp -r api/ /tmp/
+          cp -r web/ /tmp/
+          cd ..
+          cp -r /tmp/upstream-dify/api/ ./
+          cp -r /tmp/upstream-dify/web/ ./
+
+      - name: Update docker-compose.yaml
+        if: steps.check-updates.outputs.updates == 'true'
+        run: |
+          # 确保docker-compose.yaml包含Keycloak相关的环境变量
+          if ! grep -q "KEYCLOAK_CLIENT_ID" docker-compose.yaml; then
+            echo "Adding Keycloak environment variables to docker-compose.yaml..."
+            # 在适当位置添加Keycloak环境变量
+            sed -i '/# OAuth2\/SSO Configuration/a\  KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-}\n  KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}\n  KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL:-}' docker-compose.yaml
+          fi
+
+      - name: Setup Docker Buildx
+        if: steps.check-updates.outputs.updates == 'true'
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+
+      - name: Login to Container Registry
+        if: steps.check-updates.outputs.updates == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        if: steps.check-updates.outputs.updates == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          push: true
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ github.sha }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:v$(date +'%Y.%m.%d')
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Build and push Web image
+        if: steps.check-updates.outputs.updates == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          push: true
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:${{ github.sha }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:v$(date +'%Y.%m.%d')
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Build and push Worker image
+        if: steps.check-updates.outputs.updates == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          push: true
+          target: worker
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ github.sha }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:v$(date +'%Y.%m.%d')
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Commit and push changes
+        if: steps.check-updates.outputs.updates == 'true'
+        run: |
+          git add .
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Sync from upstream ${{ env.UPSTREAM_REPO }}@${{ env.UPSTREAM_BRANCH }}
+            
+            - Applied Keycloak OAuth integration patch
+            - Updated docker-compose.yaml with Keycloak environment variables
+            - Built and pushed Docker images with latest upstream changes
+            
+            Upstream commit: $(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})"
+            git push origin main
+          fi
+
+      - name: Create Release
+        if: steps.check-updates.outputs.updates == 'true'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v$(date +'%Y.%m.%d')-$(date +'%H%M')
+          release_name: Dify Enterprise SSO - $(date +'%Y-%m-%d %H:%M')
+          body: |
+            ## 🚀 Dify Enterprise SSO Release
+            
+            This release includes:
+            - Latest Dify updates from upstream repository
+            - Keycloak OAuth integration patch applied
+            - Updated docker-compose.yaml with Keycloak environment variables
+            - Fresh Docker images built from latest upstream code
+            
+            ### 🔗 Docker Images
+            
+            - **API**: `${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest`
+            - **Web**: `${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest`
+            - **Worker**: `${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest`
+            
+            ### 📋 Changes
+            
+            - Synced from upstream: ${{ env.UPSTREAM_REPO }}@${{ env.UPSTREAM_BRANCH }}
+            - Upstream commit: $(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})
+            - Keycloak OAuth integration maintained
+            - Environment variables updated
+            
+            ### 🚀 Quick Start
+            
+            ```bash
+            # Pull the latest images
+            docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
+            docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
+            docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
+            ```
+            
+            ### 🔧 Multi-Platform Support
+            
+            Images are built for:
+            - linux/amd64
+            - linux/arm64
+            
+            ### 📦 Docker Compose
+            
+            ```yaml
+            version: '3.8'
+            services:
+              api:
+                image: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
+                environment:
+                  - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID}
+                  - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+                  - KEYCLOAK_ISSUER_URL=${KEYCLOAK_ISSUER_URL}
+                  - ENABLE_SOCIAL_OAUTH_LOGIN=true
+              
+              web:
+                image: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
+              
+              worker:
+                image: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
+            ```
+          draft: false
+          prerelease: false
+
+      - name: Update README with latest info
+        if: steps.check-updates.outputs.updates == 'true'
+        run: |
+          # 更新README中的版本信息
+          if grep -q "Last Updated:" README.md; then
+            sed -i "s/Last Updated:.*/Last Updated: $(date +'%Y-%m-%d %H:%M UTC')/" README.md
+          else
+            echo "" >> README.md
+            echo "## 📅 Version Information" >> README.md
+            echo "" >> README.md
+            echo "**Last Updated**: $(date +'%Y-%m-%d %H:%M UTC')" >> README.md
+          fi
+          
+          if grep -q "Upstream Version:" README.md; then
+            sed -i "s/Upstream Version:.*/Upstream Version: $(git rev-parse upstream\/${{ env.UPSTREAM_BRANCH }})/" README.md
+          else
+            echo "**Upstream Version**: $(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})" >> README.md
+          fi
+          
+          git add README.md
+          if git diff --staged --quiet; then
+            echo "No README changes to commit"
+          else
+            git commit -m "Update README with latest sync information"
+            git push origin main
+          fi
+
+      - name: Comment on PR if exists
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🔄 Dify Sync Status
+            
+              **Status**: ${{ steps.check-updates.outputs.updates == 'true' && '✅ Updated from upstream' || '✅ Already up to date' }}
+              
+              **Last Check**: $(date -u +'%Y-%m-%d %H:%M UTC')
+              
+              **Upstream Repository**: ${{ env.UPSTREAM_REPO }}
+              **Upstream Branch**: ${{ env.UPSTREAM_BRANCH }}
+              
+              ${{ steps.check-updates.outputs.updates == 'true' && '**Changes Applied**:\n- ✅ Keycloak OAuth patch applied\n- ✅ Docker images built and pushed\n- ✅ docker-compose.yaml updated\n- ✅ Release created' || '**No Updates**: Repository is already synchronized with upstream' }}`
+            })
+
+      - name: Summary
+        run: |
+          echo "## 🎯 Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Upstream**: ${{ env.UPSTREAM_REPO }}@${{ env.UPSTREAM_BRANCH }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status**: ${{ steps.check-updates.outputs.updates == 'true' && '🔄 Updated' || '✅ Up to date' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.check-updates.outputs.updates }}" = "true" ]; then
+            echo "### 📦 Docker Images Built" >> $GITHUB_STEP_SUMMARY
+            echo "- **API**: \`${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web**: \`${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Worker**: \`${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔧 Changes Applied" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Keycloak OAuth integration patch" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Environment variables updated" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Docker images rebuilt" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Release created" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🌐 Multi-Platform Support" >> $GITHUB_STEP_SUMMARY
+            echo "Images built for: \`${{ env.DOCKER_PLATFORMS }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ℹ️ No Updates Required" >> $GITHUB_STEP_SUMMARY
+            echo "Repository is already synchronized with upstream." >> $GITHUB_STEP_SUMMARY
+          fi
