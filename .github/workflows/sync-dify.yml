@@ -169,7 +169,6 @@ jobs:
           context: ./api
           platforms: ${{ env.DOCKER_PLATFORMS }}
           push: true
-          target: worker
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ github.sha }}
@@ -178,6 +177,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+            SERVICE_TYPE=worker
 
       - name: Commit and push changes
         if: steps.check-updates.outputs.updates == 'true'
