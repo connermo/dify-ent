@@ -227,3 +227,8 @@ If you encounter issues:
 
 **Note**: This integration is designed for development and testing. For production use, ensure proper security measures including HTTPS, strong passwords, and regular security updates.
 
+
+## 📅 Version Information
+
+**Last Updated**: 2025-08-11 09:07 UTC
+**Upstream Version**: 2c81db5a1c0f87e6297936a007a2bdafeab12875
