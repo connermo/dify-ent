@@ -61,7 +61,7 @@ index 4a6cb9939..8396c7398 100644
  
  
 diff --git a/api/libs/oauth.py b/api/libs/oauth.py
-index df75b5501..d915d3c7b 100644
+index df75b5501..e0ea7e512 100644
 --- a/api/libs/oauth.py
 +++ b/api/libs/oauth.py
 @@ -131,3 +131,63 @@ class GoogleOAuth(OAuth):
@@ -88,7 +88,7 @@ index df75b5501..d915d3c7b 100644
 +        self._TOKEN_URL = f"{self.issuer_url}/protocol/openid-connect/token"
 +        self._USER_INFO_URL = f"{self.issuer_url}/protocol/openid-connect/userinfo"
 +
-+    def get_authorization_url(self, invite_token: Optional[str] = None):
++    def get_authorization_url(self, invite_token: str = None):
 +        params = {
 +            "client_id": self.client_id,
 +            "response_type": "code",
