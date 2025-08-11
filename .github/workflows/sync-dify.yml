@@ -121,13 +121,6 @@ jobs:
           # 复制修改后的文件
           echo "UPSTREAM_SRC=/tmp/upstream-dify" >> $GITHUB_ENV
 
-      - name: Update upstream source with patch
-        if: steps.check-updates.outputs.updates == 'true'
-        run: |
-          # 将补丁应用到 /tmp/upstream-dify 源码
-          cd $UPSTREAM_SRC
-          git apply /tmp/dify-keycloak.diff
-
       - name: Setup Docker Buildx
         if: steps.check-updates.outputs.updates == 'true'
         uses: docker/setup-buildx-action@v3
