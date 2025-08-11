@@ -136,7 +136,7 @@ jobs:
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ github.sha }}
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:v${{ github.event.head_commit.timestamp != '' && format(github.event.head_commit.timestamp, 'YYYYMMDD') || 'latest' }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:v${{ github.run_number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -152,7 +152,7 @@ jobs:
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:${{ github.sha }}
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:v${{ github.event.head_commit.timestamp != '' && format(github.event.head_commit.timestamp, 'YYYYMMDD') || 'latest' }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:v${{ github.run_number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -169,7 +169,7 @@ jobs:
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ github.sha }}
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:v${{ github.event.head_commit.timestamp != '' && format(github.event.head_commit.timestamp, 'YYYYMMDD') || 'latest' }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:v${{ github.run_number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -198,8 +198,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ github.event.head_commit.timestamp != '' && format(github.event.head_commit.timestamp, 'YYYYMMDD') || 'latest' }}
-          release_name: Dify Enterprise SSO - ${{ github.event.head_commit.timestamp != '' && format(github.event.head_commit.timestamp, 'YYYY-MM-DD') || 'Latest' }}
+          tag_name: v${{ github.run_number }}
+          release_name: Dify Enterprise SSO - Run ${{ github.run_number }}
           body: |
             ## 🚀 Dify Enterprise SSO Release
             
