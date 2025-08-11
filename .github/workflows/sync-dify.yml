@@ -1,9 +1,6 @@
 name: Sync Dify from Upstream and Build Images
 
 on:
-  schedule:
-    # 每天凌晨2点运行
-    - cron: '0 2 * * *'
   workflow_dispatch:
     # 允许手动触发
     inputs:
