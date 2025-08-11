@@ -21,12 +21,16 @@ env:
   UPSTREAM_REPO: langgenius/dify
   UPSTREAM_BRANCH: main
   DOCKER_REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/dify
+  IMAGE_NAME: ${{ github.repository_owner }}/dify
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
   sync-and-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
     steps:
       - name: Checkout current repository
         uses: actions/checkout@v4
