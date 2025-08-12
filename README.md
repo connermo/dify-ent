@@ -1,234 +1,137 @@
-# Dify Enterprise SSO (Local Keycloak Integration)
+# Dify Enterprise SSO (本地 Keycloak 集成)
 
-This repository provides a complete solution for integrating Dify Console with a local Keycloak OAuth2/OpenID Connect (OIDC) server for Single Sign-On (SSO) authentication.
+本仓库提供了一个完整的解决方案，用于将 Dify Console 与本地 Keycloak OAuth2/OpenID Connect (OIDC) 服务器集成，实现单点登录 (SSO) 认证。
 
-## 🏗️ Architecture Overview
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Dify Console │    │   Dify API      │    │   Keycloak     │
-│   (Frontend)   │    │   (Backend)     │    │   (OIDC IdP)   │
-│                 │    │                 │    │                 │
-│ - Login Button │───▶│ - OAuth Routes  │───▶│ - Auth Server  │
-│ - OAuth Flow   │    │ - Token Exchange│    │ - User Mgmt    │
-│ - Callback     │    │ - User Creation │    │ - Realm Config │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
+## 🚀 快速开始
 
-## 🚀 Quick Start
-
-### 1. Start Keycloak Server
+### 1. 启动 Keycloak 服务器
 
 ```bash
 cd keycloak
 docker compose up -d
 ```
 
-Wait for Keycloak to be ready (check logs):
+等待 Keycloak 准备就绪（检查日志）：
 ```bash
 docker compose logs -f keycloak
 ```
 
-**Expected URLs:**
-- Keycloak Admin: http://localhost:8280/admin
-- Dify Realm: http://localhost:8280/realms/dify
-- OpenID Config: http://localhost:8280/realms/dify/.well-known/openid-configuration
+**预期访问地址：**
+- Keycloak 管理界面: http://localhost:8280/admin
+- Dify 域: http://localhost:8280/realms/dify
+- OpenID 配置: http://localhost:8280/realms/dify/.well-known/openid-configuration
 
-**Default Credentials:**
-- Admin: `admin` / `admin`
-- Test User: `alice` / `alice1234`
+**默认凭据：**
+- 管理员: `admin` / `admin`
+- 测试用户: `alice` / `alice1234`
 
-### 2. Configure Dify Environment Variables
+### 2. 应用 SSO 集成到 Dify
 
-Add these to your Dify `api` service `.env` file:
+#### 方案 A: 使用自动化脚本（推荐）
+```bash
+# 运行 SSO 集成脚本
+./scripts/apply-sso-integration.sh
+```
+
+此脚本将：
+- ✅ 添加 Keycloak 配置字段
+- ✅ 添加支持 PKCE 的 KeycloakOAuth 类
+- ✅ 更新 OAuth 控制器以集成 Keycloak
+- ✅ 添加 OAuth 提供商 API 端点
+- ✅ 更新 docker-compose.yaml 以包含 SSO 环境变量
+- ✅ 更新前端以显示 'SSO' 而不是 'Keycloak'
+- ✅ 创建包含默认 SSO 配置的 .env 文件
+
+#### 方案 B: 手动代码修改
+手动进入镜像修改以下文件：
+- `api/configs/feature/__init__.py` - 添加 Keycloak 配置字段
+- `api/libs/oauth.py` - 添加 KeycloakOAuth 类
+- `api/controllers/console/auth/oauth.py` - 注册 Keycloak 提供商
+- `web/app/signin/components/social-auth.tsx` - 添加登录按钮
+
+### 3. 配置环境变量
+
+#### 必需的 SSO 环境变量
+
+在您的 Dify 服务中添加以下环境变量：
 
 ```bash
-# OAuth Configuration
+# SSO 认证开关
 ENABLE_SOCIAL_OAUTH_LOGIN=true
 
-# Keycloak OAuth Settings
+# Keycloak OAuth 配置
 KEYCLOAK_CLIENT_ID=dify-console
 KEYCLOAK_CLIENT_SECRET=dify-console-secret
 KEYCLOAK_ISSUER_URL=http://localhost:8280/realms/dify
 
-# Dify URLs (adjust ports as needed)
+# Dify 服务地址配置
 CONSOLE_API_URL=http://localhost:5001
 CONSOLE_WEB_URL=http://localhost:3000
+
+# 用户注册和工作空间权限
+ALLOW_REGISTER=true
+ALLOW_CREATE_WORKSPACE=true
 ```
 
-### 3. Apply Code Changes
+#### 完整的 .env 文件示例
 
-#### Option A: Use the Patch File (Recommended)
 ```bash
-cd /path/to/your/dify
-git apply /path/to/dify-ent/dify-keycloak.diff
+# SSO 配置
+ENABLE_SOCIAL_OAUTH_LOGIN=true
+
+# Keycloak OAuth 设置
+KEYCLOAK_CLIENT_ID=dify-console
+KEYCLOAK_CLIENT_SECRET=dify-console-secret
+KEYCLOAK_ISSUER_URL=http://localhost:8280/realms/dify
+
+# Dify 服务地址
+CONSOLE_API_URL=http://localhost:5001
+CONSOLE_WEB_URL=http://localhost:3000
+
+# 用户权限设置
+ALLOW_REGISTER=true
+ALLOW_CREATE_WORKSPACE=true
+
+# 其他可选配置
+ENABLE_SIGNUP=true
+ENABLE_OAUTH_LOGIN=true
 ```
 
-#### Option B: Manual Code Changes
-Apply the changes manually to these files:
-- `api/configs/feature/__init__.py` - Add Keycloak config fields
-- `api/libs/oauth.py` - Add KeycloakOAuth class
-- `api/controllers/console/auth/oauth.py` - Register Keycloak provider
-- `web/app/signin/components/social-auth.tsx` - Add login button
+#### Docker Compose 环境变量配置
 
-### 4. Restart Dify Services
+在 `docker-compose.yaml` 中的 `api` 服务下添加：
 
-```bash
-# Restart API service
-docker compose restart api
-
-# Restart Web service  
-docker compose restart web
+```yaml
+services:
+  api:
+    environment:
+      # SSO 认证开关
+      - ENABLE_SOCIAL_OAUTH_LOGIN=true
+      
+      # Keycloak 配置
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-dify-console}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-dify-console-secret}
+      - KEYCLOAK_ISSUER_URL=${KEYCLOAK_ISSUER_URL:-http://localhost:8280/realms/dify}
+      
+      # Dify 服务地址
+      - CONSOLE_API_URL=${CONSOLE_API_URL:-http://localhost:5001}
+      - CONSOLE_WEB_URL=${CONSOLE_WEB_URL:-http://localhost:3000}
+      
+      # 用户权限
+      - ALLOW_REGISTER=${ALLOW_REGISTER:-true}
+      - ALLOW_CREATE_WORKSPACE=${ALLOW_CREATE_WORKSPACE:-true}
 ```
 
-## 🔧 Configuration Details
-
-### Keycloak Realm Configuration
-
-The `keycloak/realm-dify.json` file pre-configures:
-
-- **Realm**: `dify` - Security domain for Dify applications
-- **Client**: `dify-console` - OAuth client for Dify Console
-- **User**: `alice` - Test user with email `alice@example.com`
-- **Redirect URIs**: Configured for localhost development
-- **Scopes**: OpenID Connect standard scopes enabled
-
-### OAuth Flow
-
-1. **User clicks "Login with Keycloak"** on Dify sign-in page
-2. **Redirect to Keycloak** with OAuth2 authorization request
-3. **User authenticates** on Keycloak (username/password or SSO)
-4. **Keycloak redirects back** to Dify with authorization code
-5. **Dify exchanges code** for access token and user info
-6. **User is logged in** to Dify with Keycloak identity
-
-### Security Features
-
-- **HTTPS Required**: Configured for production use
-- **Client Secret**: Secure client authentication
-- **Standard Flow**: OAuth2 Authorization Code flow
-- **Scope Control**: Configurable user permissions
-- **Session Management**: Integrated with Dify's session system
-
-## 🛠️ Development & Customization
-
-### Adding New Users
+### 4. 启动服务
 
 ```bash
-# Access Keycloak Admin Console
-open http://localhost:8280/admin
-
-# Login with admin/admin
-# Navigate to Users → Add User
-# Set username, email, and credentials
-```
-
-### Customizing the Realm
-
-```bash
-# Export current realm configuration
-docker exec keycloak /opt/keycloak/bin/kc.sh export --realm dify --file custom-realm.json
-
-# Modify the JSON file
-# Import back to Keycloak
-docker exec keycloak /opt/keycloak/bin/kc.sh import --file custom-realm.json
-```
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `KEYCLOAK_ADMIN` | Admin username | `admin` |
-| `KEYCLOAK_ADMIN_PASSWORD` | Admin password | `admin` |
-| `KC_HTTP_PORT` | Keycloak port | `8080` |
-| `KC_DB` | Database type | `dev-file` |
-
-## 🔍 Troubleshooting
-
-### Common Issues
-
-#### 1. Keycloak Won't Start
-```bash
-# Check if port 8280 is available
-netstat -tlnp | grep 8280
-
-# Check Docker logs
-docker compose logs keycloak
-
-# Restart with clean volumes
-docker compose down -v
+# 启动所有服务
 docker compose up -d
+
+# 检查服务状态
+docker compose ps
+
+# 查看日志
+docker compose logs -f
 ```
-
-#### 2. OAuth Login Button Not Visible
-- Verify `ENABLE_SOCIAL_OAUTH_LOGIN=true`
-- Check browser console for JavaScript errors
-- Ensure all environment variables are set
-
-#### 3. Authentication Fails
-- Verify `KEYCLOAK_ISSUER_URL` is correct
-- Check Keycloak client configuration
-- Ensure redirect URIs match exactly
-
-#### 4. User Creation Issues
-- Check if user exists in Keycloak realm
-- Verify email verification settings
-- Check Dify logs for error messages
-
-### Debug Mode
-
-Enable debug logging in Keycloak:
-```bash
-# Add to docker-compose.yml environment
-KC_LOG_LEVEL: DEBUG
-```
-
-### Health Checks
-
-```bash
-# Check Keycloak health
-curl -f http://localhost:8280/realms/dify/.well-known/openid-configuration
-
-# Check Dify API health
-curl -f http://localhost:5001/health
-```
-
-## 📚 Additional Resources
-
-- [Keycloak Documentation](https://www.keycloak.org/documentation)
-- [OpenID Connect Specification](https://openid.net/connect/)
-- [OAuth 2.0 RFC](https://tools.ietf.org/html/rfc6749)
-- [Dify Documentation](https://docs.dify.ai/)
-
-## 🤝 Contributing
-
-To contribute to this integration:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🆘 Support
-
-If you encounter issues:
-
-1. Check the troubleshooting section above
-2. Review Keycloak and Dify logs
-3. Verify all configuration steps
-4. Open an issue with detailed error information
-
----
-
-**Note**: This integration is designed for development and testing. For production use, ensure proper security measures including HTTPS, strong passwords, and regular security updates.
-
-
-## 📅 Version Information
-
-**Last Updated**: 2025-08-11 09:07 UTC
-**Upstream Version**: 2c81db5a1c0f87e6297936a007a2bdafeab12875

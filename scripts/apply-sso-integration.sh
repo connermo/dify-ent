@@ -270,6 +270,10 @@ KEYCLOAK_ISSUER_URL=http://localhost:8280/realms/dify
 # Console and API URLs
 CONSOLE_API_URL=http://localhost:5001
 CONSOLE_WEB_URL=http://localhost:3000
+
+# User Registration and Workspace Settings
+ALLOW_REGISTER=true
+ALLOW_CREATE_WORKSPACE=true
 EOF
 
 echo "✅ Created .env file with SSO configuration"
