@@ -19,8 +19,8 @@ on:
       - main
     paths:
       - '.github/workflows/sync-dify.yml'
-      - 'dify-keycloak.diff'
-      - 'docker-compose.yaml'
+      - 'dify/api/**'
+      - 'dify/docker/docker-compose.yaml'
 
 env:
   UPSTREAM_REPO: langgenius/dify
@@ -95,31 +95,27 @@ jobs:
       - name: Prepare workspace
         if: steps.check-updates.outputs.updates == 'true'
         run: |
-          # 保存当前的补丁和配置文件
-          cp dify-keycloak.diff /tmp/ || true
-          cp docker-compose.yaml /tmp/ || true
-          cp -r keycloak/ /tmp/ || true
+          # 备份现有的SSO集成修改
+          mkdir -p /tmp/backup
+          cp -r dify/api/libs/oauth.py /tmp/backup/ 2>/dev/null || true
+          cp -r dify/api/configs/feature/__init__.py /tmp/backup/ 2>/dev/null || true
+          cp -r dify/api/controllers/console/auth/oauth.py /tmp/backup/ 2>/dev/null || true
+          cp -r dify/docker/docker-compose.yaml /tmp/backup/ 2>/dev/null || true
+          cp -r keycloak/ /tmp/backup/ 2>/dev/null || true
 
-      - name: Apply Keycloak patch
+      - name: Update Dify with latest release and apply SSO integration
         if: steps.check-updates.outputs.updates == 'true'
         run: |
-          cd /tmp
-          git clone https://github.com/${{ env.UPSTREAM_REPO }}.git upstream-dify
-          cd upstream-dify
-          git checkout tags/${{ env.UPSTREAM_RELEASE_TAG }} -b release-build
+          # Update dify directory to latest release
+          cd dify
+          git fetch origin
+          git checkout tags/${{ env.UPSTREAM_RELEASE_TAG }} -B release-${{ env.UPSTREAM_RELEASE_TAG }}
           
-          # 应用补丁
-          if git apply /tmp/dify-keycloak.diff; then
-            echo "Patch applied successfully"
-          else
-            echo "Patch failed to apply, checking for conflicts..."
-            git apply --check /tmp/dify-keycloak.diff || true
-            echo "Patch application failed. Please review the changes manually."
-            exit 1
-          fi
+          # Apply SSO integration script
+          cd ..
+          ./scripts/apply-sso-integration.sh
           
-          # 复制修改后的文件
-          echo "UPSTREAM_SRC=/tmp/upstream-dify" >> $GITHUB_ENV
+          echo "UPSTREAM_SRC=dify" >> $GITHUB_ENV
 
       - name: Setup Docker Buildx
         if: steps.check-updates.outputs.updates == 'true'
@@ -144,6 +140,7 @@ jobs:
           push: true
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ env.UPSTREAM_RELEASE_TAG }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
           provenance: false
           cache-from: |
             type=gha
@@ -164,6 +161,7 @@ jobs:
           push: true
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:${{ env.UPSTREAM_RELEASE_TAG }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
           provenance: false
           cache-from: |
             type=gha
@@ -184,6 +182,7 @@ jobs:
           push: true
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ env.UPSTREAM_RELEASE_TAG }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
           provenance: false
           cache-from: |
             type=gha
@@ -199,17 +198,22 @@ jobs:
       - name: Commit and push changes
         if: steps.check-updates.outputs.updates == 'true'
         run: |
+          # Record the upstream release tag
+          echo "${{ env.UPSTREAM_RELEASE_TAG }}" > LAST_UPSTREAM_RELEASE
+          
           git add .
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Sync from upstream ${{ env.UPSTREAM_REPO }}@${{ env.UPSTREAM_BRANCH }}
+            git commit -m "🚀 Sync from upstream ${{ env.UPSTREAM_REPO }} ${{ env.UPSTREAM_RELEASE_TAG }}
             
-            - Applied Keycloak OAuth integration patch
-            - Updated docker-compose.yaml with Keycloak environment variables
-            - Built and pushed Docker images with latest upstream changes
+            - ✅ Updated dify/ to release ${{ env.UPSTREAM_RELEASE_TAG }}
+            - ✅ Applied Keycloak OAuth integration automatically
+            - ✅ Updated docker-compose.yaml with SSO environment variables
+            - ✅ Built and pushed Docker images with latest upstream changes
             
-            Upstream commit: $(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})"
+            🔗 Upstream release: ${{ env.UPSTREAM_RELEASE_TAG }}
+            📦 Images: ghcr.io/${{ github.repository_owner }}/dify-{api,web,worker}:${{ env.UPSTREAM_RELEASE_TAG }}"
             git push origin main
           fi
 

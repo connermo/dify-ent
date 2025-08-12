@@ -12,10 +12,10 @@
       "publicClient": false,
       "protocol": "openid-connect",
       "redirectUris": [
-        "http://localhost:5001/console/api/oauth/authorize/keycloak"
+        "https://dify.cocotask.com:8443/console/api/oauth/authorize/keycloak"
       ],
       "webOrigins": [
-        "http://localhost:3000"
+        "https://dify.cocotask.com:8443"
       ],
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,

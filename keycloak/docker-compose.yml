@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:24.0.5
@@ -7,14 +5,23 @@ services:
     environment:
       - KEYCLOAK_ADMIN=admin
       - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_PROXY=edge
+      - KC_HOSTNAME_URL=https://1panel.cocotask.com:8443
+      - KC_HOSTNAME_ADMIN_URL=https://1panel.cocotask.com:8443
+      - KC_HOSTNAME_STRICT=false
+      - KC_HOSTNAME_STRICT_HTTPS=false
+      - KC_HTTP_ENABLED=true
+      - KC_PROXY_HEADERS=xforwarded
+      - KC_SPI_LOGIN_PROTOCOL_OPENID_CONNECT_SUPPRESS_LOGOUT_CONFIRMATION_SCREEN=true
     ports:
       - "8280:8080"
     volumes:
       - ./realm-dify.json:/opt/keycloak/data/import/realm-dify.json
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/realms/master"]
-      interval: 5s
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/8080'"]
+      interval: 10s
       timeout: 5s
       retries: 30
+      start_period: 60s
 
 
