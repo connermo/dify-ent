@@ -1,0 +1,246 @@
+diff --git a/api/configs/feature/__init__.py b/api/configs/feature/__init__.py
+index 1234567..abcdefg 100644
+--- a/api/configs/feature/__init__.py
++++ b/api/configs/feature/__init__.py
+@@ -601,6 +601,18 @@ class FeatureConfig(BaseSettings):
+     GOOGLE_CLIENT_SECRET: Optional[str] = Field(
+         description="Google OAuth client secret",
+         default=None,
+     )
++
++    # Keycloak (OIDC/OAuth2) optional settings for console social login
++    KEYCLOAK_CLIENT_ID: Optional[str] = Field(
++        description="Keycloak OAuth client ID",
++        default=None,
++    )
++    KEYCLOAK_CLIENT_SECRET: Optional[str] = Field(
++        description="Keycloak OAuth client secret",
++        default=None,
++    )
++    KEYCLOAK_ISSUER_URL: Optional[str] = Field(
++        description="Keycloak issuer url, e.g. http://localhost:8080/realms/dify",
++        default=None,
++    )
+
+diff --git a/api/libs/oauth.py b/api/libs/oauth.py
+index 1234567..abcdefg 100644
+--- a/api/libs/oauth.py
++++ b/api/libs/oauth.py
+@@ -1,3 +1,7 @@
++import hashlib
++import base64
++import secrets
++import json
+ import urllib.parse
+ from abc import ABC, abstractmethod
+ from typing import Optional
+@@ -130,3 +134,76 @@ class GoogleOAuth(OAuth):
+         name = raw_info.get("name") or ""
+         email = raw_info.get("email") or ""
+         return OAuthUserInfo(id=str(raw_info.get("sub", "")), name=name, email=email)
++
++
++class KeycloakOAuth(OAuth):
++    """
++    Minimal OAuth2/OIDC client for Keycloak with PKCE support.
++
++    issuer_url should be like: http://localhost:8080/realms/dify
++    which yields standard endpoints under:
++      - {issuer_url}/protocol/openid-connect/auth
++      - {issuer_url}/protocol/openid-connect/token
++      - {issuer_url}/protocol/openid-connect/userinfo
++    """
++
++    def __init__(self, client_id: str, client_secret: str, redirect_uri: str, issuer_url: str):
++        super().__init__(client_id, client_secret, redirect_uri)
++        self.issuer_url = issuer_url.rstrip("/")
++        self._AUTH_URL = f"{self.issuer_url}/protocol/openid-connect/auth"
++        self._TOKEN_URL = f"{self.issuer_url}/protocol/openid-connect/token"
++        self._USER_INFO_URL = f"{self.issuer_url}/protocol/openid-connect/userinfo"
++
++        # Generate PKCE parameters
++        self.code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
++        self.code_challenge = base64.urlsafe_b64encode(
++            hashlib.sha256(self.code_verifier.encode('utf-8')).digest()
++        ).decode('utf-8').rstrip('=')
++
++    def get_authorization_url(self, invite_token: str = None):
++        params = {
++            "client_id": self.client_id,
++            "response_type": "code",
++            "redirect_uri": self.redirect_uri,
++            # request minimal scopes to retrieve email
++            "scope": "openid email profile",
++            # PKCE parameters
++            "code_challenge": self.code_challenge,
++            "code_challenge_method": "S256",
++        }
++        # Encode code_verifier in state to persist it across the OAuth flow
++        state_data = {"code_verifier": self.code_verifier}
++        if invite_token:
++            state_data["invite_token"] = invite_token
++        params["state"] = base64.urlsafe_b64encode(json.dumps(state_data).encode()).decode()
++        return f"{self._AUTH_URL}?{urllib.parse.urlencode(params)}"
++
++    def set_code_verifier(self, code_verifier: str):
++        """Set the code verifier from state parameter during callback"""
++        self.code_verifier = code_verifier
++
++    def get_access_token(self, code: str):
++        data = {
++            "client_id": self.client_id,
++            "client_secret": self.client_secret,
++            "code": code,
++            "grant_type": "authorization_code",
++            "redirect_uri": self.redirect_uri,
++            "code_verifier": self.code_verifier,
++        }
++        headers = {"Accept": "application/json"}
++        response = requests.post(self._TOKEN_URL, data=data, headers=headers, verify=False)
++        response.raise_for_status()
++        response_json = response.json()
++        access_token = response_json.get("access_token")
++        if not access_token:
++            raise ValueError(f"Error in Keycloak OAuth: {response_json}")
++        return access_token
++
++    def get_raw_user_info(self, token: str):
++        headers = {"Authorization": f"Bearer {token}"}
++        response = requests.get(self._USER_INFO_URL, headers=headers, verify=False)
++        response.raise_for_status()
++        return response.json()
++
++    def _transform_user_info(self, raw_info: dict) -> OAuthUserInfo:
++        # Keycloak OIDC userinfo contains 'sub' and may include 'email' and 'name'
++        email = raw_info.get("email") or ""
++        name = raw_info.get("name") or raw_info.get("preferred_username") or ""
++        return OAuthUserInfo(id=str(raw_info.get("sub", "")), name=name, email=email)
+
+diff --git a/api/controllers/console/auth/oauth.py b/api/controllers/console/auth/oauth.py
+index 1234567..abcdefg 100644
+--- a/api/controllers/console/auth/oauth.py
++++ b/api/controllers/console/auth/oauth.py
+@@ -1,3 +1,5 @@
++import base64
++import json
+ from typing import Optional
+
+ from flask import current_app, redirect, request
+@@ -8,7 +10,7 @@ from flask_restful import Resource
+ from configs import dify_config
+ from controllers.console.auth.error import InvalidInvitationCodeError
+ from controllers.console.setup import setup_required
+-from libs.oauth import GitHubOAuth, GoogleOAuth, OAuthUserInfo
++from libs.oauth import GitHubOAuth, GoogleOAuth, OAuthUserInfo, KeycloakOAuth
+ from models.account import Account
+ from models.model import DifySetup
+ from services.account_service import AccountService, TenantService
+@@ -37,7 +39,19 @@ def get_oauth_providers():
+         else:
+             google_oauth = None
+
+-        OAUTH_PROVIDERS = {"github": github_oauth, "google": google_oauth}
++        # Keycloak settings are optional; present only when fully configured
++        if (
++            getattr(dify_config, "KEYCLOAK_CLIENT_ID", None)
++            and getattr(dify_config, "KEYCLOAK_CLIENT_SECRET", None)
++            and getattr(dify_config, "KEYCLOAK_ISSUER_URL", None)
++        ):
++            keycloak_oauth = KeycloakOAuth(
++                client_id=dify_config.KEYCLOAK_CLIENT_ID,
++                client_secret=dify_config.KEYCLOAK_CLIENT_SECRET,
++                redirect_uri=dify_config.CONSOLE_API_URL + "/console/api/oauth/authorize/keycloak",
++                issuer_url=dify_config.KEYCLOAK_ISSUER_URL,
++            )
++        else:
++            keycloak_oauth = None
++
++        OAUTH_PROVIDERS = {"github": github_oauth, "google": google_oauth, "keycloak": keycloak_oauth}
+
+     return OAUTH_PROVIDERS
+
+@@ -45,6 +59,14 @@ def get_oauth_providers():
+ api = Api(oauth_bp)
+
+
++class OAuthProvidersApi(Resource):
++    """Resource for listing available OAuth providers."""
++
++    def get(self):
++        """Get the list of available OAuth providers."""
++        OAUTH_PROVIDERS = get_oauth_providers()
++        available_providers = {k: v is not None for k, v in OAUTH_PROVIDERS.items()}
++        return {"providers": available_providers}
++
++
+ class OAuthLogin(Resource):
+     def get(self, provider: str):
+@@ -73,6 +95,19 @@ class OAuthCallback(Resource):
+         code = request.args.get("code")
+         state = request.args.get("state")
++        invite_token = None
++
++        # Parse state parameter for Keycloak PKCE support
++        if state and provider == "keycloak":
++            try:
++                state_data = json.loads(base64.urlsafe_b64decode(state).decode())
++                code_verifier = state_data.get("code_verifier")
++                invite_token = state_data.get("invite_token")
++                if code_verifier:
++                    oauth_provider.set_code_verifier(code_verifier)
++            except Exception:
++                # Fallback to treating state as invite_token
++                invite_token = state
++        elif state:
++            invite_token = state
+
+         if not code:
+             raise ValueError("Authorization code not found in callback")
+@@ -101,7 +136,7 @@ class OAuthCallback(Resource):
+             )
+
++api.add_resource(OAuthProvidersApi, "/oauth/providers")
+ api.add_resource(OAuthLogin, "/oauth/login/<provider>")
+ api.add_resource(OAuthCallback, "/oauth/authorize/<provider>")
+
+diff --git a/docker/docker-compose.yaml b/docker/docker-compose.yaml
+index 1234567..abcdefg 100644
+--- a/docker/docker-compose.yaml
++++ b/docker/docker-compose.yaml
+@@ -95,6 +95,15 @@ x-shared-env: &shared-api-worker-env
+   GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+   NOTION_INTEGRATION_TYPE: ${NOTION_INTEGRATION_TYPE:-}
+   NOTION_INTERNAL_SECRET: ${NOTION_INTERNAL_SECRET:-}
++  # SSO & OAuth Settings
++  ENABLE_SOCIAL_OAUTH_LOGIN: ${ENABLE_SOCIAL_OAUTH_LOGIN:-false}
++  GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
++  GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
++  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
++  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
++  KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-}
++  KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
++  KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL:-}
+
+diff --git a/web/app/signin/components/social-auth.tsx b/web/app/signin/components/social-auth.tsx
+index 1234567..abcdefg 100644
+--- a/web/app/signin/components/social-auth.tsx
++++ b/web/app/signin/components/social-auth.tsx
+@@ -85,12 +85,12 @@ export default function SocialAuth(props: SocialAuthProps) {
+     {providers.keycloak && (
+       <div className='w-full'>
+         <a href={getOAuthLink('/oauth/login/keycloak')}>
+           <Button
+             disabled={props.disabled}
+             className='w-full'
+           >
+             <>
+-              <span className="mr-2 h-5 w-5 flex items-center justify-center bg-blue-600 text-white text-xs font-bold rounded">
+-                KC
++              <span className="mr-2 h-5 w-5 flex items-center justify-center bg-indigo-600 text-white text-xs font-bold rounded">
++                SSO
+               </span>
+-              <span className="truncate leading-normal">{t('login.withKeycloak')}</span>
++              <span className="truncate leading-normal">{t('login.withSSO')}</span>
+             </>
+           </Button>
+         </a>
