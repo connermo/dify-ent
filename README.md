@@ -135,3 +135,7 @@ docker compose ps
 # 查看日志
 docker compose logs -f
 ```
+## 📅 Version Information
+
+**Last Updated**: 2025-08-20 11:42 UTC
+**Upstream Version**: upstream/main
