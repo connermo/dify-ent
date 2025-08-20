@@ -58,18 +58,53 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Add upstream remote
-        run: |
-          git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
-          git fetch upstream --tags
-
-      - name: Get latest upstream release tag
+      - name: Get latest upstream release tag (digits only)
         id: latest-release
         uses: actions/github-script@v7
         with:
           script: |
-            const rel = await github.rest.repos.getLatestRelease({ owner: 'langgenius', repo: 'dify' });
-            core.setOutput('tag', rel.data.tag_name);
+            try {
+              // Get all releases (paginated)
+              const releases = await github.paginate(github.rest.repos.listReleases, {
+                owner: 'langgenius',
+                repo: 'dify',
+                per_page: 100
+              });
+              
+              console.log(`Found ${releases.length} total releases`);
+              
+              // Filter releases that start with digits (not 'v')
+              const numericReleases = releases.filter(release => {
+                const tagName = release.tag_name;
+                return /^\d/.test(tagName) && !release.prerelease && !release.draft;
+              });
+              
+              console.log(`Found ${numericReleases.length} numeric releases (non-prerelease)`);
+              
+              if (numericReleases.length === 0) {
+                core.setFailed('No numeric releases found');
+                return;
+              }
+              
+              // Sort by creation date (newest first) and get the latest
+              numericReleases.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+              const latestRelease = numericReleases[0];
+              
+              console.log(`Latest numeric release: ${latestRelease.tag_name}`);
+              console.log(`Release date: ${latestRelease.created_at}`);
+              
+              core.setOutput('tag', latestRelease.tag_name);
+              core.setOutput('tarball_url', latestRelease.tarball_url);
+              
+              // Log first 5 numeric releases for debugging
+              console.log('Recent numeric releases:');
+              numericReleases.slice(0, 5).forEach((rel, idx) => {
+                console.log(`  ${idx + 1}. ${rel.tag_name} (${rel.created_at})`);
+              });
+              
+            } catch (error) {
+              core.setFailed(`Failed to get releases: ${error.message}`);
+            }
 
       - name: Export release tag to env
         run: |
@@ -103,19 +138,49 @@ jobs:
           cp -r dify/docker/docker-compose.yaml /tmp/backup/ 2>/dev/null || true
           cp -r keycloak/ /tmp/backup/ 2>/dev/null || true
 
-      - name: Update Dify with latest release and apply SSO integration
+      - name: Download and extract latest release
         if: steps.check-updates.outputs.updates == 'true'
         run: |
-          # Update dify directory to latest release
-          cd dify
-          git fetch origin
-          git checkout tags/${{ env.UPSTREAM_RELEASE_TAG }} -B release-${{ env.UPSTREAM_RELEASE_TAG }}
+          echo "Downloading Dify release ${{ env.UPSTREAM_RELEASE_TAG }}"
           
-          # Apply SSO integration script
-          cd ..
-          ./scripts/apply-sso-integration.sh
+          # Create temporary directory for download
+          mkdir -p /tmp/dify-download
+          cd /tmp/dify-download
+          
+          # Download release tarball
+          curl -L -o dify-release.tar.gz "${{ steps.latest-release.outputs.tarball_url }}"
+          
+          # Extract tarball
+          tar -xzf dify-release.tar.gz --strip-components=1
+          
+          # Backup existing dify directory
+          cd ${{ github.workspace }}
+          if [ -d "dify" ]; then
+            rm -rf dify.backup 2>/dev/null || true
+            mv dify dify.backup
+          fi
+          
+          # Move extracted files to dify directory
+          mv /tmp/dify-download dify
           
           echo "UPSTREAM_SRC=dify" >> $GITHUB_ENV
+
+      - name: Apply SSO integration patches
+        if: steps.check-updates.outputs.updates == 'true'
+        run: |
+          # Apply SSO integration script
+          ./scripts/apply-sso-integration.sh
+          
+          # Also apply Paraview SSO patch if it exists
+          if [ -f "paraview-sso-integration.patch" ]; then
+            echo "Applying Paraview SSO integration patch"
+            cd dify
+            git init
+            git add .
+            git commit -m "Initial commit from upstream ${{ env.UPSTREAM_RELEASE_TAG }}"
+            git apply ../paraview-sso-integration.patch || echo "Paraview patch application failed, continuing..."
+            cd ..
+          fi
 
       - name: Setup Docker Buildx
         if: steps.check-updates.outputs.updates == 'true'
