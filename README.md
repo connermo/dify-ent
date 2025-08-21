@@ -139,3 +139,8 @@ docker compose logs -f
 
 **Last Updated**: 2025-08-20 11:42 UTC
 **Upstream Version**: upstream/main
+
+## 📅 Version Information
+
+**Last Updated**: 2025-08-21 10:09 UTC
+**Upstream Version**: upstream/main
