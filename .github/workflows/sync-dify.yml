@@ -121,12 +121,25 @@ jobs:
           else
             PREV_TAG=""
           fi
-          if [ "$PREV_TAG" = "$UPSTREAM_RELEASE_TAG" ] && [ "${{ github.event.inputs.force_sync }}" != "true" ]; then
+          
+          # Check if there are patch file changes in the current commit
+          PATCH_CHANGES=$(git diff HEAD~1 --name-only | grep '\.patch$' || echo "")
+          WORKFLOW_CHANGES=$(git diff HEAD~1 --name-only | grep '.github/workflows/sync-dify.yml' || echo "")
+          
+          if [ "$PREV_TAG" = "$UPSTREAM_RELEASE_TAG" ] && [ "${{ github.event.inputs.force_sync }}" != "true" ] && [ -z "$PATCH_CHANGES" ] && [ -z "$WORKFLOW_CHANGES" ]; then
             echo "updates=false" >> $GITHUB_OUTPUT
-            echo "Already at latest upstream release $UPSTREAM_RELEASE_TAG"
+            echo "Already at latest upstream release $UPSTREAM_RELEASE_TAG and no patch changes"
           else
             echo "updates=true" >> $GITHUB_OUTPUT
-            echo "Will update from '$PREV_TAG' to '$UPSTREAM_RELEASE_TAG'"
+            if [ "$PREV_TAG" != "$UPSTREAM_RELEASE_TAG" ]; then
+              echo "Will update from '$PREV_TAG' to '$UPSTREAM_RELEASE_TAG'"
+            fi
+            if [ -n "$PATCH_CHANGES" ]; then
+              echo "Patch file changes detected: $PATCH_CHANGES"
+            fi
+            if [ -n "$WORKFLOW_CHANGES" ]; then
+              echo "Workflow changes detected"
+            fi
           fi
 
       - name: Prepare workspace
@@ -165,6 +178,31 @@ jobs:
           # Move extracted files to dify directory
           mv /tmp/dify-download dify
           
+          echo "UPSTREAM_SRC=dify" >> $GITHUB_ENV
+
+      - name: Ensure dify directory exists (for patch-only updates)
+        if: steps.check-updates.outputs.updates == 'true'
+        run: |
+          # If we don't have dify directory but need to apply patches, download current release
+          if [ ! -d "dify" ]; then
+            echo "No dify directory found, downloading current release ${{ env.UPSTREAM_RELEASE_TAG }}"
+            
+            # Create temporary directory for download
+            mkdir -p /tmp/dify-download
+            cd /tmp/dify-download
+            
+            # Download release tarball
+            curl -L -o dify-release.tar.gz "${{ steps.latest-release.outputs.tarball_url }}"
+            
+            # Extract tarball
+            tar -xzf dify-release.tar.gz --strip-components=1
+            
+            # Move extracted files to dify directory
+            cd ${{ github.workspace }}
+            mv /tmp/dify-download dify
+          fi
+          
+          # Always set this for consistency
           echo "UPSTREAM_SRC=dify" >> $GITHUB_ENV
 
       - name: Apply SSO integration patches
