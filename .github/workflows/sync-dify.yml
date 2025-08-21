@@ -335,72 +335,58 @@ jobs:
             git push origin main
           fi
 
-      - name: Create Release
+      - name: Create or Update Release
         if: steps.check-updates.outputs.updates == 'true'
-        uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ env.UPSTREAM_RELEASE_TAG }}
-          release_name: Dify Enterprise SSO - ${{ env.UPSTREAM_RELEASE_TAG }}
-          body: |
-            ## 🚀 Dify Enterprise SSO Release
-            
-            This release includes:
-            - Latest Dify updates from upstream repository
-            - Keycloak OAuth integration patch applied
-            - Updated docker-compose.yaml with Keycloak environment variables
-            - Fresh Docker images built from latest upstream code
-            
-            ### 🔗 Docker Images
-            
-            - **API**: `${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest`
-            - **Web**: `${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest`
-            - **Worker**: `${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest`
-            
-            ### 📋 Changes
-            
-            - Synced from upstream: ${{ env.UPSTREAM_REPO }}@${{ env.UPSTREAM_BRANCH }}
-            - Upstream commit: $(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})
-            - Keycloak OAuth integration maintained
-            - Environment variables updated
-            
-            ### 🚀 Quick Start
-            
-            ```bash
-            # Pull the latest images
-            docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
-            docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
-            docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
-            ```
-            
-            ### 🔧 Multi-Platform Support
-            
-            Images are built for:
-            - linux/amd64
-            - linux/arm64
-            
-            ### 📦 Docker Compose
-            
-            ```yaml
-            version: '3.8'
-            services:
-              api:
-                image: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
-                environment:
-                  - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID}
-                  - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
-                  - KEYCLOAK_ISSUER_URL=${KEYCLOAK_ISSUER_URL}
-                  - ENABLE_SOCIAL_OAUTH_LOGIN=true
+        run: |
+          # Check if release already exists
+          if gh release view "${{ env.UPSTREAM_RELEASE_TAG }}" >/dev/null 2>&1; then
+            echo "Release ${{ env.UPSTREAM_RELEASE_TAG }} already exists, updating it..."
+            gh release edit "${{ env.UPSTREAM_RELEASE_TAG }}" \
+              --title "Dify Enterprise SSO - ${{ env.UPSTREAM_RELEASE_TAG }} (Updated $(date +'%Y-%m-%d %H:%M'))" \
+              --notes "## 🚀 Dify Enterprise SSO Release (Updated)
               
-              web:
-                image: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
+              This release includes:
+              - Latest Dify updates from upstream repository
+              - Keycloak OAuth integration patch applied
+              - **Disable conversation logging patch applied** 🔒
+              - Updated docker-compose.yaml with Keycloak environment variables
+              - Fresh Docker images built from latest upstream code
               
-              worker:
-                image: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
-            ```
-          draft: false
-          prerelease: false
+              ### 🔗 Docker Images (Updated)
+              
+              - **API**: \`ghcr.io/${{ github.repository_owner }}/dify-api:latest\`
+              - **Web**: \`ghcr.io/${{ github.repository_owner }}/dify-web:latest\`
+              - **Worker**: \`ghcr.io/${{ github.repository_owner }}/dify-worker:latest\`
+              
+              ### 📋 Latest Changes
+              
+              - ✅ Disable conversation logging feature added
+              - ✅ Synced from upstream: langgenius/dify@main
+              - ✅ Keycloak OAuth integration maintained
+              - ✅ Environment variables updated
+              
+              Last updated: $(date +'%Y-%m-%d %H:%M UTC')"
+          else
+            echo "Creating new release ${{ env.UPSTREAM_RELEASE_TAG }}..."
+            gh release create "${{ env.UPSTREAM_RELEASE_TAG }}" \
+              --title "Dify Enterprise SSO - ${{ env.UPSTREAM_RELEASE_TAG }}" \
+              --notes "## 🚀 Dify Enterprise SSO Release
+              
+              This release includes:
+              - Latest Dify updates from upstream repository
+              - Keycloak OAuth integration patch applied
+              - **Disable conversation logging patch applied** 🔒
+              - Updated docker-compose.yaml with Keycloak environment variables
+              - Fresh Docker images built from latest upstream code
+              
+              ### 🔗 Docker Images
+              
+              - **API**: \`ghcr.io/${{ github.repository_owner }}/dify-api:latest\`
+              - **Web**: \`ghcr.io/${{ github.repository_owner }}/dify-web:latest\`
+              - **Worker**: \`ghcr.io/${{ github.repository_owner }}/dify-worker:latest\`"
+          fi
 
       - name: Update README with latest info
         if: steps.check-updates.outputs.updates == 'true'
