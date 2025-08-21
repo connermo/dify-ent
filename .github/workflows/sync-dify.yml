@@ -21,6 +21,8 @@ on:
       - '.github/workflows/sync-dify.yml'
       - 'dify/api/**'
       - 'dify/docker/docker-compose.yaml'
+      - '*.patch'
+      - 'scripts/**'
 
 env:
   UPSTREAM_REPO: langgenius/dify
@@ -171,7 +173,7 @@ jobs:
           # Apply SSO integration script
           ./scripts/apply-sso-integration.sh
           
-          # Also apply Paraview SSO patch if it exists
+          # Also apply other patches if they exist
           if [ -f "paraview-sso-integration.patch" ]; then
             echo "Applying Paraview SSO integration patch"
             cd dify
@@ -179,6 +181,19 @@ jobs:
             git add .
             git commit -m "Initial commit from upstream ${{ env.UPSTREAM_RELEASE_TAG }}"
             git apply ../paraview-sso-integration.patch || echo "Paraview patch application failed, continuing..."
+            cd ..
+          fi
+          
+          # Apply disable conversation logging patch if it exists
+          if [ -f "disable-conversation-logging.patch" ]; then
+            echo "Applying disable conversation logging patch"
+            cd dify
+            if [ ! -d ".git" ]; then
+              git init
+              git add .
+              git commit -m "Initial commit from upstream ${{ env.UPSTREAM_RELEASE_TAG }}"
+            fi
+            git apply ../disable-conversation-logging.patch || echo "Disable conversation logging patch application failed, continuing..."
             cd ..
           fi
 
