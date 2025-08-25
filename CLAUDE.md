@@ -13,14 +13,77 @@ This is **Dify Enterprise SSO**, a complete solution that integrates the open-so
 - **Deployment**: Docker Compose setup using official Dify configuration
 - **Development**: Direct integration into dify/ directory for easy upstream sync
 
-## Common Development Commands
+## Development Environment Setup
 
-### Development Workflow
+### Prerequisites
+Before starting development, ensure you have the following installed:
+- **CPU**: >= 2 cores
+- **RAM**: >= 4 GiB  
+- **Python**: 3.12
+- **Node.js**: v22 (LTS)
+- **PNPM**: v10
+- **Docker** and **Docker Compose**
+- **Optional**: FFmpeg for OpenAI TTS
+
+### Local Source Code Development (根据官方文档)
+
+#### 1. 环境准备和中间件启动
+```bash
+# Clone repository (if not already done)
+git clone https://github.com/langgenius/dify.git
+
+# Start middleware services (Redis, PostgreSQL, etc.)
+cd docker
+cp middleware.env.example middleware.env
+docker compose -f docker-compose.middleware.yaml up -d
+```
+
+#### 2. 后端服务 (API) 开发
+```bash
+cd api
+cp .env.example .env
+
+# 生成随机 SECRET_KEY 并配置环境变量
+# Generate SECRET_KEY: openssl rand -base64 42
+
+# Install dependencies and setup database
+uv sync
+uv run flask db upgrade
+
+# Start API server in development mode
+uv run flask run --host 0.0.0.0 --port=5001 --debug
+```
+
+#### 3. Worker 服务启动
+```bash
+# In a new terminal, start Celery worker
+cd api
+uv run celery -A app.celery worker -P gevent -c 1 --loglevel INFO
+```
+
+#### 4. Web 前端服务开发
+```bash
+cd web
+pnpm install --frozen-lockfile
+cp .env.example .env.local
+
+# Build and start web service
+pnpm build
+pnpm start
+```
+
+#### 5. 访问应用
+- **Web Console**: http://127.0.0.1:3000
+- **API Endpoint**: http://127.0.0.1:5001
+
+### Enterprise SSO Development Workflow
+For this enterprise SSO version, additional steps are required:
+
 ```bash
 # Start Keycloak first for SSO setup
 cd keycloak && docker compose up -d
 
-# Start the complete Dify environment with SSO integration
+# For containerized development (alternative to source code)
 cd dify && docker compose up -d
 
 # Restart API service after code changes
@@ -31,7 +94,23 @@ cd dify && docker compose logs -f api
 cd keycloak && docker compose logs -f keycloak
 ```
 
-### Building and Testing
+## Building and Testing
+
+### Source Code Development Testing
+```bash
+# Database migrations (source code mode)
+cd api
+uv run flask db upgrade
+
+# API health check
+curl -f http://localhost:5001/health
+
+# Frontend build verification
+cd web
+pnpm build
+```
+
+### Container Development Testing  
 ```bash
 # Build and restart services
 cd dify && docker compose build api && docker compose restart api
@@ -39,8 +118,22 @@ cd dify && docker compose build api && docker compose restart api
 # Test Keycloak configuration
 curl -f http://localhost:8280/realms/dify/.well-known/openid-configuration
 
-# Test Dify API health
+# Test Dify API health  
 curl -f http://localhost:5001/health
+```
+
+### Development Best Practices
+```bash
+# Recommended: Use pyenv to manage Python versions
+pyenv install 3.12
+pyenv local 3.12
+
+# Install uv for fast Python dependency management
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Keep dependencies up to date
+cd api && uv sync --upgrade
+cd web && pnpm install --frozen-lockfile
 ```
 
 ### Database Management
