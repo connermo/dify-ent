@@ -1,0 +1,1027 @@
+diff --git a/api/controllers/console/app/conversation.py b/api/controllers/console/app/conversation.py
+index 6ddae6fad..efd27bb26 100644
+--- a/api/controllers/console/app/conversation.py
++++ b/api/controllers/console/app/conversation.py
+@@ -1,6 +1,7 @@
+ from datetime import datetime
+ 
+ import pytz  # pip install pytz
++from flask import request
+ from flask_login import current_user
+ from flask_restful import Resource, marshal_with, reqparse
+ from flask_restful.inputs import int_range
+@@ -23,7 +24,9 @@ from libs.datetime_utils import naive_utc_now
+ from libs.helper import DatetimeString
+ from libs.login import login_required
+ from models import Conversation, EndUser, Message, MessageAnnotation
+-from models.model import AppMode
++from models.model import AppMode, MessageFeedback, MessageFile, MessageChain, MessageAgentThought, UploadFile
++from models.workflow import ConversationVariable
++from extensions.ext_storage import storage
+ 
+ 
+ class CompletionConversationApi(Resource):
+@@ -96,6 +99,103 @@ class CompletionConversationApi(Resource):
+ 
+         return conversations
+ 
++    @setup_required
++    @login_required
++    @account_initialization_required
++    @get_app_model(mode=AppMode.COMPLETION)
++    def delete(self, app_model):
++        """Clear completion conversations and related data including files"""
++        if not current_user.is_editor:
++            raise Forbidden()
++
++        parser = reqparse.RequestParser()
++        parser.add_argument('conversation_ids', type=str, action='append', location='json')
++        args = parser.parse_args()
++
++        # If specific conversation IDs provided, delete only those; otherwise delete all
++        if args['conversation_ids']:
++            conversation_ids = [str(id) for id in args['conversation_ids']]
++            conversations = db.session.query(Conversation).filter(
++                Conversation.app_id == app_model.id,
++                Conversation.mode == "completion",
++                Conversation.id.in_(conversation_ids)
++            ).all()
++        else:
++            # Get all conversations for this app
++            conversations = db.session.query(Conversation).filter(
++                Conversation.app_id == app_model.id,
++                Conversation.mode == "completion"
++            ).all()
++
++        # Collect all message IDs first to clean related data
++        all_message_ids = []
++        for conversation in conversations:
++            message_ids = db.session.query(Message.id).filter(Message.conversation_id == conversation.id).all()
++            all_message_ids.extend([msg_id[0] for msg_id in message_ids])
++
++        # Delete message files from storage and database
++        upload_file_ids = []
++        if all_message_ids:
++            # Get all message files to delete their actual files from storage
++            message_files = db.session.query(MessageFile).filter(MessageFile.message_id.in_(all_message_ids)).all()
++            upload_file_ids = [mf.upload_file_id for mf in message_files if mf.upload_file_id]
++
++            # Delete actual files from storage
++            if upload_file_ids:
++                upload_files = db.session.query(UploadFile).filter(UploadFile.id.in_(upload_file_ids)).all()
++                for upload_file in upload_files:
++                    try:
++                        storage.delete(upload_file.key)
++                    except Exception as e:
++                        # Log error but continue with cleanup
++                        print(f"Failed to delete file {upload_file.key}: {e}")
++                # Delete upload file records
++                db.session.query(UploadFile).filter(UploadFile.id.in_(upload_file_ids)).delete(synchronize_session=False)
++
++            # Delete message-related database records
++            try:
++                db.session.query(MessageFeedback).filter(MessageFeedback.message_id.in_(all_message_ids)).delete(synchronize_session=False)
++            except Exception:
++                pass  # Table might not exist in this version
++            try:
++                db.session.query(MessageFile).filter(MessageFile.message_id.in_(all_message_ids)).delete(synchronize_session=False)  
++            except Exception:
++                pass
++            try:
++                db.session.query(MessageChain).filter(MessageChain.message_id.in_(all_message_ids)).delete(synchronize_session=False)
++            except Exception:
++                pass
++            try:
++                db.session.query(MessageAgentThought).filter(MessageAgentThought.message_id.in_(all_message_ids)).delete(synchronize_session=False)
++            except Exception:
++                pass
++
++        for conversation in conversations:
++            # Delete messages
++            db.session.query(Message).filter(Message.conversation_id == conversation.id).delete()
++            # Delete message annotations
++            db.session.query(MessageAnnotation).filter(MessageAnnotation.conversation_id == conversation.id).delete()
++            # Delete conversation-related data
++            try:
++                db.session.query(ConversationVariable).filter(ConversationVariable.conversation_id == conversation.id).delete()
++            except Exception:
++                pass  # Table might not exist in this version
++
++        # Delete conversations
++        db.session.query(Conversation).filter(
++            Conversation.app_id == app_model.id,
++            Conversation.mode == "completion"
++        ).delete()
++
++        db.session.commit()
++
++        return {
++            "result": "success",
++            "conversations_deleted": len(conversations),
++            "messages_deleted": len(all_message_ids),
++            "files_deleted": len(upload_file_ids)
++        }
++
+ 
+ class CompletionConversationDetailApi(Resource):
+     @setup_required
+@@ -261,6 +361,105 @@ class ChatConversationApi(Resource):
+ 
+         return conversations
+ 
++    @setup_required
++    @login_required
++    @account_initialization_required
++    @get_app_model(mode=[AppMode.CHAT, AppMode.AGENT_CHAT, AppMode.ADVANCED_CHAT])
++    def delete(self, app_model):
++        """Clear chat conversations and related data including files"""
++        if not current_user.is_editor:
++            raise Forbidden()
++
++        parser = reqparse.RequestParser()
++        parser.add_argument('conversation_ids', type=str, action='append', location='json')
++        args = parser.parse_args()
++
++        # If specific conversation IDs provided, delete only those; otherwise delete all
++        if args['conversation_ids']:
++            conversation_ids = [str(id) for id in args['conversation_ids']]
++            conversations = db.session.query(Conversation).filter(
++                Conversation.app_id == app_model.id,
++                Conversation.mode.in_(["chat", "agent-chat", "advanced-chat"]),
++                Conversation.id.in_(conversation_ids)
++            ).all()
++        else:
++            # Get all conversations for this app
++            conversations = db.session.query(Conversation).filter(
++                Conversation.app_id == app_model.id,
++                Conversation.mode.in_(["chat", "agent-chat", "advanced-chat"])
++            ).all()
++
++        # Collect all message IDs first to clean related data
++        all_message_ids = []
++        for conversation in conversations:
++            message_ids = db.session.query(Message.id).filter(Message.conversation_id == conversation.id).all()
++            all_message_ids.extend([msg_id[0] for msg_id in message_ids])
++
++        # Initialize counters for audit log
++        upload_file_ids = []
++        
++        # Delete message files from storage and database
++        if all_message_ids:
++            # Get all message files to delete their actual files from storage
++            message_files = db.session.query(MessageFile).filter(MessageFile.message_id.in_(all_message_ids)).all()
++            upload_file_ids = [mf.upload_file_id for mf in message_files if mf.upload_file_id]
++
++            # Delete actual files from storage
++            if upload_file_ids:
++                upload_files = db.session.query(UploadFile).filter(UploadFile.id.in_(upload_file_ids)).all()
++                for upload_file in upload_files:
++                    try:
++                        storage.delete(upload_file.key)
++                    except Exception as e:
++                        # Log error but continue with cleanup
++                        print(f"Failed to delete file {upload_file.key}: {e}")
++                # Delete upload file records
++                db.session.query(UploadFile).filter(UploadFile.id.in_(upload_file_ids)).delete(synchronize_session=False)
++
++            # Delete message-related database records
++            try:
++                db.session.query(MessageFeedback).filter(MessageFeedback.message_id.in_(all_message_ids)).delete(synchronize_session=False)
++            except Exception:
++                pass  # Table might not exist in this version
++            try:
++                db.session.query(MessageFile).filter(MessageFile.message_id.in_(all_message_ids)).delete(synchronize_session=False)  
++            except Exception:
++                pass
++            try:
++                db.session.query(MessageChain).filter(MessageChain.message_id.in_(all_message_ids)).delete(synchronize_session=False)
++            except Exception:
++                pass
++            try:
++                db.session.query(MessageAgentThought).filter(MessageAgentThought.message_id.in_(all_message_ids)).delete(synchronize_session=False)
++            except Exception:
++                pass
++
++        for conversation in conversations:
++            # Delete messages
++            db.session.query(Message).filter(Message.conversation_id == conversation.id).delete()
++            # Delete message annotations
++            db.session.query(MessageAnnotation).filter(MessageAnnotation.conversation_id == conversation.id).delete()
++            # Delete conversation-related data
++            try:
++                db.session.query(ConversationVariable).filter(ConversationVariable.conversation_id == conversation.id).delete()
++            except Exception:
++                pass  # Table might not exist in this version
++
++        # Delete conversations
++        db.session.query(Conversation).filter(
++            Conversation.app_id == app_model.id,
++            Conversation.mode.in_(["chat", "agent-chat", "advanced-chat"])
++        ).delete()
++
++        db.session.commit()
++
++        return {
++            "result": "success",
++            "conversations_deleted": len(conversations),
++            "messages_deleted": len(all_message_ids),
++            "files_deleted": len(upload_file_ids)
++        }
++
+ 
+ class ChatConversationDetailApi(Resource):
+     @setup_required
+diff --git a/api/services/conversation_service.py b/api/services/conversation_service.py
+index 713c4c678..1137d1235 100644
+--- a/api/services/conversation_service.py
++++ b/api/services/conversation_service.py
+@@ -124,7 +124,17 @@ class ConversationService:
+         else:
+             conversation.name = name
+             conversation.updated_at = naive_utc_now()
+-            db.session.commit()
++            try:
++                db.session.commit()
++            except Exception as e:
++                # Handle case where conversation was deleted after we retrieved it
++                from sqlalchemy.orm.exc import StaleDataError
++                db.session.rollback()
++                if isinstance(e, StaleDataError):
++                    # Conversation was likely deleted, raise ConversationNotExistsError
++                    raise ConversationNotExistsError()
++                else:
++                    raise
+ 
+         return conversation
+ 
+@@ -150,7 +160,17 @@ class ConversationService:
+         except:
+             pass
+ 
+-        db.session.commit()
++        try:
++            db.session.commit()
++        except Exception as e:
++            # Handle case where conversation was deleted after we retrieved it
++            from sqlalchemy.orm.exc import StaleDataError
++            db.session.rollback()
++            if isinstance(e, StaleDataError):
++                # Conversation was likely deleted, raise ConversationNotExistsError
++                raise ConversationNotExistsError()
++            else:
++                raise
+ 
+         return conversation
+ 
+diff --git a/web/app/components/app/log/filter.tsx b/web/app/components/app/log/filter.tsx
+index 6e259a2f1..551966d01 100644
+--- a/web/app/components/app/log/filter.tsx
++++ b/web/app/components/app/log/filter.tsx
+@@ -1,16 +1,19 @@
+ 'use client'
+ import type { FC } from 'react'
+-import React from 'react'
++import React, { useState } from 'react'
+ import { useTranslation } from 'react-i18next'
+ import useSWR from 'swr'
+ import dayjs from 'dayjs'
+-import { RiCalendarLine } from '@remixicon/react'
++import { RiCalendarLine, RiDeleteBin2Line } from '@remixicon/react'
+ import quarterOfYear from 'dayjs/plugin/quarterOfYear'
+ import type { QueryParam } from './index'
+ import Chip from '@/app/components/base/chip'
+ import Input from '@/app/components/base/input'
+ import Sort from '@/app/components/base/sort'
+-import { fetchAnnotationsCount } from '@/service/log'
++import Button from '@/app/components/base/button'
++import Confirm from '@/app/components/base/confirm'
++import { useToastContext } from '@/app/components/base/toast'
++import { fetchAnnotationsCount, clearChatConversations, clearCompletionConversations } from '@/service/log'
+ dayjs.extend(quarterOfYear)
+ 
+ const today = dayjs()
+@@ -32,67 +35,144 @@ type IFilterProps = {
+   appId: string
+   queryParams: QueryParam
+   setQueryParams: (v: QueryParam) => void
++  onRefresh?: () => void
++  selectedItems?: string[]
++  onClearSelected?: (conversationIds?: string[]) => void
+ }
+ 
+-const Filter: FC<IFilterProps> = ({ isChatMode, appId, queryParams, setQueryParams }: IFilterProps) => {
++const Filter: FC<IFilterProps> = ({ isChatMode, appId, queryParams, setQueryParams, onRefresh, selectedItems, onClearSelected }: IFilterProps) => {
+   const { data } = useSWR({ url: `/apps/${appId}/annotations/count` }, fetchAnnotationsCount)
+   const { t } = useTranslation()
++  const { notify } = useToastContext()
++  const [showConfirm, setShowConfirm] = useState<'all' | 'selected' | false>(false)
++  const [isClearing, setIsClearing] = useState(false)
++
++  const handleClearLogs = async (conversationIds?: string[]) => {
++    setIsClearing(true)
++    try {
++      if (isChatMode) {
++        await clearChatConversations({ appId, conversationIds })
++      } else {
++        await clearCompletionConversations({ appId, conversationIds })
++      }
++      const message = conversationIds 
++        ? t('appLog.filter.clearSelectedSuccess') 
++        : t('appLog.filter.clearSuccess')
++      notify({ type: 'success', message })
++      onRefresh?.()
++      onClearSelected?.(conversationIds)
++    } catch (error) {
++      console.error('Failed to clear logs:', error)
++      notify({ type: 'error', message: t('appLog.filter.clearFailed') })
++    } finally {
++      setIsClearing(false)
++      setShowConfirm(false)
++    }
++  }
+   if (!data)
+     return null
+   return (
+-    <div className='mb-2 flex flex-row flex-wrap items-center gap-2'>
+-      <Chip
+-        className='min-w-[150px]'
+-        panelClassName='w-[270px]'
+-        leftIcon={<RiCalendarLine className='h-4 w-4 text-text-secondary' />}
+-        value={queryParams.period}
+-        onSelect={(item) => {
+-          setQueryParams({ ...queryParams, period: item.value })
+-        }}
+-        onClear={() => setQueryParams({ ...queryParams, period: '9' })}
+-        items={Object.entries(TIME_PERIOD_MAPPING).map(([k, v]) => ({ value: k, name: t(`appLog.filter.period.${v.name}`) }))}
+-      />
+-      <Chip
+-        className='min-w-[150px]'
+-        panelClassName='w-[270px]'
+-        showLeftIcon={false}
+-        value={queryParams.annotation_status || 'all'}
+-        onSelect={(item) => {
+-          setQueryParams({ ...queryParams, annotation_status: item.value as string })
+-        }}
+-        onClear={() => setQueryParams({ ...queryParams, annotation_status: 'all' })}
+-        items={[
+-          { value: 'all', name: t('appLog.filter.annotation.all') },
+-          { value: 'annotated', name: t('appLog.filter.annotation.annotated', { count: data?.count }) },
+-          { value: 'not_annotated', name: t('appLog.filter.annotation.not_annotated') },
+-        ]}
+-      />
+-      <Input
+-        wrapperClassName='w-[200px]'
+-        showLeftIcon
+-        showClearIcon
+-        value={queryParams.keyword}
+-        placeholder={t('common.operation.search')!}
+-        onChange={(e) => {
+-          setQueryParams({ ...queryParams, keyword: e.target.value })
+-        }}
+-        onClear={() => setQueryParams({ ...queryParams, keyword: '' })}
+-      />
+-      {isChatMode && (
+-        <>
+-          <div className='h-3.5 w-px bg-divider-regular'></div>
+-          <Sort
+-            order={queryParams.sort_by?.startsWith('-') ? '-' : ''}
+-            value={queryParams.sort_by?.replace('-', '') || 'created_at'}
+-            items={[
+-              { value: 'created_at', name: t('appLog.table.header.time') },
+-              { value: 'updated_at', name: t('appLog.table.header.updatedTime') },
+-            ]}
+-            onSelect={(value) => {
+-              setQueryParams({ ...queryParams, sort_by: value as string })
+-            }}
+-          />
+-        </>
++    <div className='mb-2 flex flex-row flex-wrap items-center justify-between gap-2'>
++      <div className='flex flex-row flex-wrap items-center gap-2'>
++        <Chip
++          className='min-w-[150px]'
++          panelClassName='w-[270px]'
++          leftIcon={<RiCalendarLine className='h-4 w-4 text-text-secondary' />}
++          value={queryParams.period}
++          onSelect={(item) => {
++            setQueryParams({ ...queryParams, period: item.value })
++          }}
++          onClear={() => setQueryParams({ ...queryParams, period: '9' })}
++          items={Object.entries(TIME_PERIOD_MAPPING).map(([k, v]) => ({ value: k, name: t(`appLog.filter.period.${v.name}`) }))}
++        />
++        <Chip
++          className='min-w-[150px]'
++          panelClassName='w-[270px]'
++          showLeftIcon={false}
++          value={queryParams.annotation_status || 'all'}
++          onSelect={(item) => {
++            setQueryParams({ ...queryParams, annotation_status: item.value as string })
++          }}
++          onClear={() => setQueryParams({ ...queryParams, annotation_status: 'all' })}
++          items={[
++            { value: 'all', name: t('appLog.filter.annotation.all') },
++            { value: 'annotated', name: t('appLog.filter.annotation.annotated', { count: data?.count }) },
++            { value: 'not_annotated', name: t('appLog.filter.annotation.not_annotated') },
++          ]}
++        />
++        <Input
++          wrapperClassName='w-[200px]'
++          showLeftIcon
++          showClearIcon
++          value={queryParams.keyword}
++          placeholder={t('common.operation.search')!}
++          onChange={(e) => {
++            setQueryParams({ ...queryParams, keyword: e.target.value })
++          }}
++          onClear={() => setQueryParams({ ...queryParams, keyword: '' })}
++        />
++        {isChatMode && (
++          <>
++            <div className='h-3.5 w-px bg-divider-regular'></div>
++            <Sort
++              order={queryParams.sort_by?.startsWith('-') ? '-' : ''}
++              value={queryParams.sort_by?.replace('-', '') || 'created_at'}
++              items={[
++                { value: 'created_at', name: t('appLog.table.header.time') },
++                { value: 'updated_at', name: t('appLog.table.header.updatedTime') },
++              ]}
++              onSelect={(value) => {
++                setQueryParams({ ...queryParams, sort_by: value as string })
++              }}
++            />
++          </>
++        )}
++      </div>
++
++      {/* Clear Logs Buttons */}
++      <div className='flex items-center gap-2'>
++        {selectedItems && selectedItems.length > 0 && (
++          <Button
++            variant='primary'
++            size='small'
++            onClick={() => setShowConfirm('selected')}
++            disabled={isClearing}
++            className='flex items-center gap-1'
++          >
++            <RiDeleteBin2Line className='h-4 w-4' />
++            {t('appLog.filter.clearSelected', { count: selectedItems.length })}
++          </Button>
++        )}
++        <Button
++          variant='secondary'
++          size='small'
++          onClick={() => setShowConfirm('all')}
++          disabled={isClearing}
++          className='flex items-center gap-1'
++        >
++          <RiDeleteBin2Line className='h-4 w-4' />
++          {t('appLog.filter.clearAll')}
++        </Button>
++      </div>
++
++      {/* Confirmation Dialog */}
++      {showConfirm && (
++        <Confirm
++          title={showConfirm === 'selected' 
++            ? t('appLog.filter.clearSelectedConfirm.title') 
++            : t('appLog.filter.clearConfirm.title')
++          }
++          content={showConfirm === 'selected'
++            ? t('appLog.filter.clearSelectedConfirm.content', { count: selectedItems?.length || 0 })
++            : t('appLog.filter.clearConfirm.content')
++          }
++          isShow={!!showConfirm}
++          onConfirm={() => handleClearLogs(showConfirm === 'selected' ? selectedItems : undefined)}
++          onCancel={() => setShowConfirm(false)}
++          confirmText={t('common.operation.confirm')}
++          cancelText={t('common.operation.cancel')}
++          confirmLoading={isClearing}
++        />
+       )}
+     </div>
+   )
+diff --git a/web/app/components/app/log/index.tsx b/web/app/components/app/log/index.tsx
+index 13be294be..84e0fce2b 100644
+--- a/web/app/components/app/log/index.tsx
++++ b/web/app/components/app/log/index.tsx
+@@ -60,6 +60,7 @@ const Logs: FC<ILogsProps> = ({ appDetail }) => {
+   })
+   const [currPage, setCurrPage] = React.useState<number>(0)
+   const [limit, setLimit] = React.useState<number>(APP_PAGE_LIMIT)
++  const [selectedItems, setSelectedItems] = React.useState<string[]>([])
+   const debouncedQueryParams = useDebounce(queryParams, { wait: 500 })
+ 
+   // Get the app type first
+@@ -101,15 +102,40 @@ const Logs: FC<ILogsProps> = ({ appDetail }) => {
+ 
+   const total = isChatMode ? chatConversations?.total : completionConversations?.total
+ 
++  // Clear selected items when data refreshes or conversation IDs are removed
++  const handleClearSelected = (conversationIds?: string[]) => {
++    if (conversationIds) {
++      // Remove specific conversation IDs from selection
++      setSelectedItems(prev => prev.filter(id => !conversationIds.includes(id)))
++    } else {
++      // Clear all selections
++      setSelectedItems([])
++    }
++  }
++
+   return (
+     <div className='flex h-full grow flex-col'>
+       <p className='system-sm-regular shrink-0 text-text-tertiary'>{t('appLog.description')}</p>
+       <div className='flex max-h-[calc(100%-16px)] flex-1 grow flex-col py-4'>
+-        <Filter isChatMode={isChatMode} appId={appDetail.id} queryParams={queryParams} setQueryParams={setQueryParams} />
++        <Filter
++          isChatMode={isChatMode}
++          appId={appDetail.id}
++          queryParams={queryParams}
++          setQueryParams={setQueryParams}
++          onRefresh={isChatMode ? mutateChatList : mutateCompletionList}
++          selectedItems={selectedItems}
++          onClearSelected={handleClearSelected}
++        />
+         {total === undefined
+           ? <Loading type='app' />
+           : total > 0
+-            ? <List logs={isChatMode ? chatConversations : completionConversations} appDetail={appDetail} onRefresh={isChatMode ? mutateChatList : mutateCompletionList} />
++            ? <List 
++                logs={isChatMode ? chatConversations : completionConversations} 
++                appDetail={appDetail} 
++                onRefresh={isChatMode ? mutateChatList : mutateCompletionList}
++                selectedItems={selectedItems}
++                onSelectionChange={setSelectedItems}
++              />
+             : <EmptyElement appUrl={`${appDetail.site.app_base_url}${basePath}/${getWebAppType(appDetail.mode)}/${appDetail.site.access_token}`} />
+         }
+         {/* Show Pagination only if the total is more than the limit */}
+diff --git a/web/app/components/app/log/list.tsx b/web/app/components/app/log/list.tsx
+index b83e9e6a2..ab07073eb 100644
+--- a/web/app/components/app/log/list.tsx
++++ b/web/app/components/app/log/list.tsx
+@@ -7,6 +7,7 @@ import {
+   HandThumbUpIcon,
+ } from '@heroicons/react/24/outline'
+ import { RiCloseLine, RiEditFill } from '@remixicon/react'
++import Checkbox from '@/app/components/base/checkbox'
+ import { get } from 'lodash-es'
+ import InfiniteScroll from 'react-infinite-scroll-component'
+ import dayjs from 'dayjs'
+@@ -50,6 +51,8 @@ type IConversationList = {
+   logs?: ChatConversationsResponse | CompletionConversationsResponse
+   appDetail: App
+   onRefresh: () => void
++  selectedItems?: string[]
++  onSelectionChange?: (selectedIds: string[]) => void
+ }
+ 
+ const defaultValue = 'N/A'
+@@ -640,7 +643,7 @@ const ChatConversationDetailComp: FC<{ appId?: string; conversationId?: string }
+ /**
+    * Conversation list component including basic information
+    */
+-const ConversationList: FC<IConversationList> = ({ logs, appDetail, onRefresh }) => {
++const ConversationList: FC<IConversationList> = ({ logs, appDetail, onRefresh, selectedItems = [], onSelectionChange }) => {
+   const { t } = useTranslation()
+   const { formatTime } = useTimestamp()
+ 
+@@ -651,6 +654,27 @@ const ConversationList: FC<IConversationList> = ({ logs, appDetail, onRefresh })
+   const [currentConversation, setCurrentConversation] = useState<ChatConversationGeneralDetail | CompletionConversationGeneralDetail | undefined>() // Currently selected conversation
+   const isChatMode = appDetail.mode !== 'completion' // Whether the app is a chat app
+   const isChatflow = appDetail.mode === 'advanced-chat' // Whether the app is a chatflow app
++  // Selection handling
++  const handleSelectAll = () => {
++    if (isAllSelected) {
++      onSelectionChange?.([])
++    } else {
++      const allIds = logs?.data.map(log => log.id) || []
++      onSelectionChange?.(allIds)
++    }
++  }
++
++  const handleSelectItem = (conversationId: string) => {
++    if (selectedItems.includes(conversationId)) {
++      onSelectionChange?.(selectedItems.filter(id => id !== conversationId))
++    } else {
++      onSelectionChange?.([...selectedItems, conversationId])
++    }
++  }
++
++  const isAllSelected = logs?.data.length > 0 && selectedItems.length === logs?.data.length
++  const isSomeSelected = selectedItems.length > 0 && selectedItems.length < (logs?.data.length || 0)
++
+   const { setShowPromptLogModal, setShowAgentLogModal, setShowMessageLogModal } = useAppStore(useShallow(state => ({
+     setShowPromptLogModal: state.setShowPromptLogModal,
+     setShowAgentLogModal: state.setShowAgentLogModal,
+@@ -692,7 +716,13 @@ const ConversationList: FC<IConversationList> = ({ logs, appDetail, onRefresh })
+       <table className={cn('mt-2 w-full min-w-[440px] border-collapse border-0')}>
+         <thead className='system-xs-medium-uppercase text-text-tertiary'>
+           <tr>
+-            <td className='w-5 whitespace-nowrap rounded-l-lg bg-background-section-burn pl-2 pr-1'></td>
++            <td className='w-10 whitespace-nowrap rounded-l-lg bg-background-section-burn pl-2 pr-1'>
++              <Checkbox
++                checked={isAllSelected}
++                indeterminate={isSomeSelected}
++                onCheck={handleSelectAll}
++              />
++            </td>
+             <td className='whitespace-nowrap bg-background-section-burn py-1.5 pl-3'>{isChatMode ? t('appLog.table.header.summary') : t('appLog.table.header.input')}</td>
+             <td className='whitespace-nowrap bg-background-section-burn py-1.5 pl-3'>{t('appLog.table.header.endUser')}</td>
+             {isChatflow && <td className='whitespace-nowrap bg-background-section-burn py-1.5 pl-3'>{t('appLog.table.header.status')}</td>}
+@@ -710,29 +740,65 @@ const ConversationList: FC<IConversationList> = ({ logs, appDetail, onRefresh })
+             const rightValue = get(log, isChatMode ? 'message_count' : 'message.answer')
+             return <tr
+               key={log.id}
+-              className={cn('cursor-pointer border-b border-divider-subtle hover:bg-background-default-hover', currentConversation?.id !== log.id ? '' : 'bg-background-default-hover')}
+-              onClick={() => {
+-                setShowDrawer(true)
+-                setCurrentConversation(log)
+-              }}>
+-              <td className='h-4'>
+-                {!log.read_at && (
+-                  <div className='flex items-center p-3 pr-0.5'>
++              className={cn('border-b border-divider-subtle hover:bg-background-default-hover', currentConversation?.id !== log.id ? '' : 'bg-background-default-hover')}
++              >
++              <td className='h-4 p-3'>
++                <div className='flex items-center gap-2' onClick={(e) => e.stopPropagation()}>
++                  <Checkbox
++                    checked={selectedItems.includes(log.id)}
++                    onCheck={() => handleSelectItem(log.id)}
++                  />
++                  {!log.read_at && (
+                     <span className='inline-block h-1.5 w-1.5 rounded bg-util-colors-blue-blue-500'></span>
+-                  </div>
+-                )}
++                  )}
++                </div>
+               </td>
+-              <td className='w-[160px] p-3 pr-2' style={{ maxWidth: isChatMode ? 300 : 200 }}>
++              <td 
++                className='w-[160px] p-3 pr-2 cursor-pointer' 
++                style={{ maxWidth: isChatMode ? 300 : 200 }}
++                onClick={() => {
++                  setShowDrawer(true)
++                  setCurrentConversation(log)
++                }}
++              >
+                 {renderTdValue(leftValue || t('appLog.table.empty.noChat'), !leftValue, isChatMode && log.annotated)}
+               </td>
+-              <td className='p-3 pr-2'>{renderTdValue(endUser || defaultValue, !endUser)}</td>
+-              {isChatflow && <td className='w-[160px] p-3 pr-2' style={{ maxWidth: isChatMode ? 300 : 200 }}>
++              <td 
++                className='p-3 pr-2 cursor-pointer'
++                onClick={() => {
++                  setShowDrawer(true)
++                  setCurrentConversation(log)
++                }}
++              >
++                {renderTdValue(endUser || defaultValue, !endUser)}
++              </td>
++              {isChatflow && <td 
++                className='w-[160px] p-3 pr-2 cursor-pointer' 
++                style={{ maxWidth: isChatMode ? 300 : 200 }}
++                onClick={() => {
++                  setShowDrawer(true)
++                  setCurrentConversation(log)
++                }}
++              >
+                 {statusTdRender(log.status_count)}
+               </td>}
+-              <td className='p-3 pr-2' style={{ maxWidth: isChatMode ? 100 : 200 }}>
++              <td 
++                className='p-3 pr-2 cursor-pointer' 
++                style={{ maxWidth: isChatMode ? 100 : 200 }}
++                onClick={() => {
++                  setShowDrawer(true)
++                  setCurrentConversation(log)
++                }}
++              >
+                 {renderTdValue(rightValue === 0 ? 0 : (rightValue || t('appLog.table.empty.noOutput')), !rightValue, !isChatMode && !!log.annotation?.content, log.annotation)}
+               </td>
+-              <td className='p-3 pr-2'>
++              <td 
++                className='p-3 pr-2 cursor-pointer'
++                onClick={() => {
++                  setShowDrawer(true)
++                  setCurrentConversation(log)
++                }}
++              >
+                 {(!log.user_feedback_stats.like && !log.user_feedback_stats.dislike)
+                   ? renderTdValue(defaultValue, true)
+                   : <>
+@@ -741,7 +807,13 @@ const ConversationList: FC<IConversationList> = ({ logs, appDetail, onRefresh })
+                   </>
+                 }
+               </td>
+-              <td className='p-3 pr-2'>
++              <td 
++                className='p-3 pr-2 cursor-pointer'
++                onClick={() => {
++                  setShowDrawer(true)
++                  setCurrentConversation(log)
++                }}
++              >
+                 {(!log.admin_feedback_stats.like && !log.admin_feedback_stats.dislike)
+                   ? renderTdValue(defaultValue, true)
+                   : <>
+@@ -750,8 +822,24 @@ const ConversationList: FC<IConversationList> = ({ logs, appDetail, onRefresh })
+                   </>
+                 }
+               </td>
+-              <td className='w-[160px] p-3 pr-2'>{formatTime(log.updated_at, t('appLog.dateTimeFormat') as string)}</td>
+-              <td className='w-[160px] p-3 pr-2'>{formatTime(log.created_at, t('appLog.dateTimeFormat') as string)}</td>
++              <td 
++                className='w-[160px] p-3 pr-2 cursor-pointer'
++                onClick={() => {
++                  setShowDrawer(true)
++                  setCurrentConversation(log)
++                }}
++              >
++                {formatTime(log.updated_at, t('appLog.dateTimeFormat') as string)}
++              </td>
++              <td 
++                className='w-[160px] p-3 pr-2 cursor-pointer'
++                onClick={() => {
++                  setShowDrawer(true)
++                  setCurrentConversation(log)
++                }}
++              >
++                {formatTime(log.created_at, t('appLog.dateTimeFormat') as string)}
++              </td>
+             </tr>
+           })}
+         </tbody>
+diff --git a/web/app/components/base/chat/chat-with-history/hooks.tsx b/web/app/components/base/chat/chat-with-history/hooks.tsx
+index 0f437c82b..f90d51387 100644
+--- a/web/app/components/base/chat/chat-with-history/hooks.tsx
++++ b/web/app/components/base/chat/chat-with-history/hooks.tsx
+@@ -155,6 +155,25 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
+   }, [appId, conversationIdInfo, setConversationIdInfo, userId])
+ 
+   const [newConversationId, setNewConversationId] = useState('')
++
++  // Reset newConversationId when conversations are cleared
++  useEffect(() => {
++    const handleStorageChange = (e: StorageEvent) => {
++      if (e.key === CONVERSATION_ID_INFO) {
++        // Check if all conversation IDs were cleared (empty object)
++        const newValue = e.newValue ? JSON.parse(e.newValue) : {}
++        const isEmpty = Object.keys(newValue).length === 0
++        if (isEmpty) {
++          console.log('🔄 Clearing newConversationId due to localStorage clear')
++          setNewConversationId('')
++        }
++      }
++    }
++
++    window.addEventListener('storage', handleStorageChange)
++    return () => window.removeEventListener('storage', handleStorageChange)
++  }, [])
++
+   const chatShouldReloadKey = useMemo(() => {
+     if (currentConversationId === newConversationId)
+       return ''
+diff --git a/web/i18n/en-US/app-log.ts b/web/i18n/en-US/app-log.ts
+index 0d1234050..7e8cb9b6d 100644
+--- a/web/i18n/en-US/app-log.ts
++++ b/web/i18n/en-US/app-log.ts
+@@ -74,6 +74,19 @@ const translation = {
+     sortBy: 'Sort by:',
+     descending: 'descending',
+     ascending: 'ascending',
++    clearAll: 'Clear All Logs',
++    clearSelected: 'Clear Selected ({{count}})',
++    clearSuccess: 'Logs cleared successfully',
++    clearSelectedSuccess: 'Selected logs cleared successfully',
++    clearFailed: 'Failed to clear logs',
++    clearConfirm: {
++      title: 'Clear All Logs',
++      content: 'Are you sure you want to clear all conversation logs? This action cannot be undone.',
++    },
++    clearSelectedConfirm: {
++      title: 'Clear Selected Logs',
++      content: 'Are you sure you want to clear {{count}} selected conversation logs? This action cannot be undone.',
++    },
+   },
+   workflowTitle: 'Workflow Logs',
+   workflowSubtitle: 'The log recorded the operation of Automate.',
+diff --git a/web/i18n/zh-Hans/app-log.ts b/web/i18n/zh-Hans/app-log.ts
+index 4c1815787..8eab25eec 100644
+--- a/web/i18n/zh-Hans/app-log.ts
++++ b/web/i18n/zh-Hans/app-log.ts
+@@ -74,6 +74,19 @@ const translation = {
+     sortBy: '排序：',
+     descending: '降序',
+     ascending: '升序',
++    clearAll: '清空所有日志',
++    clearSelected: '清空选中项 ({{count}})',
++    clearSuccess: '日志清空成功',
++    clearSelectedSuccess: '选中的日志已清空',
++    clearFailed: '清空日志失败',
++    clearConfirm: {
++      title: '清空所有日志',
++      content: '确定要清空所有对话日志吗？此操作无法撤销。',
++    },
++    clearSelectedConfirm: {
++      title: '清空选中日志',
++      content: '确定要清空 {{count}} 个选中的对话日志吗？此操作无法撤销。',
++    },
+   },
+   workflowTitle: '日志',
+   workflowSubtitle: '日志记录了应用的执行情况',
+diff --git a/web/service/log.ts b/web/service/log.ts
+index 4bb4626b8..cfa2f3c20 100644
+--- a/web/service/log.ts
++++ b/web/service/log.ts
+@@ -1,5 +1,7 @@
+ import type { Fetcher } from 'swr'
+-import { get, post } from './base'
++import { del, get, post } from './base'
++import { mutate } from 'swr'
++import { CONVERSATION_ID_INFO } from '../app/components/base/chat/constants'
+ import type {
+   AgentLogDetailRequest,
+   AgentLogDetailResponse,
+@@ -78,3 +80,183 @@ export const fetchTracingList: Fetcher<NodeTracingListResponse, { url: string }>
+ export const fetchAgentLogDetail = ({ appID, params }: { appID: string; params: AgentLogDetailRequest }) => {
+   return get<AgentLogDetailResponse>(`/apps/${appID}/agent/logs`, { params })
+ }
++
++// Clear chat conversations (all or selected)
++export const clearChatConversations = async ({ appId, conversationIds }: { appId: string; conversationIds?: string[] }) => {
++  try {
++    const body = conversationIds ? { conversation_ids: conversationIds } : {}
++    const result = await del<any>(`/apps/${appId}/chat-conversations`, { body })
++
++    // Clear localStorage conversation info for this app (essential for explore page)
++    // IMPORTANT: There are two different app IDs in the system:
++    // 1. app.id (used in logs page) 
++    // 2. installedApp.id (used in explore page)
++    // We need to clear conversation IDs for ALL installed apps to prevent 404 errors
++    if (typeof window !== 'undefined') {
++      const conversationIdInfo = JSON.parse(localStorage.getItem(CONVERSATION_ID_INFO) || '{}')
++      console.log(`🔧 Before clearing - ALL conversation IDs in localStorage:`, conversationIdInfo)
++      console.log(`🔧 Before clearing - conversationIdInfo for app ${appId}:`, conversationIdInfo[appId])
++      
++      // Clear conversation ID for the current app (from logs page)
++      let cleared = false
++      if (conversationIdInfo[appId]) {
++        delete conversationIdInfo[appId]
++        cleared = true
++        console.log(`✅ Cleared conversation ID info for app ${appId}`)
++      }
++      
++      // ADDITIONAL FIX: Also clear ALL conversation IDs to prevent explore page 404 errors
++      // Since the explore page uses installedApp.id which is different from app.id
++      const keysToDelete = Object.keys(conversationIdInfo)
++      if (keysToDelete.length > 0) {
++        keysToDelete.forEach(key => {
++          delete conversationIdInfo[key]
++          console.log(`🧹 Cleared conversation ID for ${key} to prevent 404 errors`)
++        })
++        cleared = true
++      }
++      
++      if (cleared) {
++        localStorage.setItem(CONVERSATION_ID_INFO, JSON.stringify(conversationIdInfo))
++        console.log(`✅ All conversation IDs cleared successfully`)
++      } else {
++        console.log(`ℹ️ No conversation ID info found to clear`)
++      }
++      
++      console.log(`🔧 After clearing - ALL conversation IDs in localStorage:`, JSON.parse(localStorage.getItem(CONVERSATION_ID_INFO) || '{}'))
++      
++      // Force trigger localStorage change event
++      window.dispatchEvent(new StorageEvent('storage', {
++        key: CONVERSATION_ID_INFO,
++        oldValue: JSON.stringify(conversationIdInfo),
++        newValue: localStorage.getItem(CONVERSATION_ID_INFO),
++        storageArea: localStorage
++      }))
++    }
++
++    // Clear relevant SWR caches
++    await Promise.all([
++      mutate(`/apps/${appId}/chat-conversations`),
++      mutate(`/apps/${appId}/completion-conversations`),
++      mutate(
++        key => typeof key === 'string' && key.includes(`/installed-apps/${appId}/messages`),
++        undefined,
++        { revalidate: false },
++      ),
++      mutate(
++        key => typeof key === 'string' && key.includes(`/installed-apps/${appId}/conversations`),
++        undefined,
++        { revalidate: false },
++      ),
++      // Clear SWR caches that might be holding references to deleted conversations
++      mutate(
++        key => Array.isArray(key) && key.includes(appId) && (key[0] === 'appConversationData' || key.includes(appId)),
++        undefined,
++        { revalidate: false },
++      ),
++      // Clear conversation generation name caches
++      mutate(
++        key => Array.isArray(key) && key.length === 3 && typeof key[2] === 'string' && key[2].length > 0,
++        undefined,
++        { revalidate: false },
++      ),
++    ])
++
++    console.log(`✅ Cleared chat conversations for app: ${appId}`)
++    return result
++  }
++  catch (error) {
++    console.error('Failed to clear chat conversations:', error)
++    throw error
++  }
++}
++
++// Clear completion conversations (all or selected)
++export const clearCompletionConversations = async ({ appId, conversationIds }: { appId: string; conversationIds?: string[] }) => {
++  try {
++    const body = conversationIds ? { conversation_ids: conversationIds } : {}
++    const result = await del<any>(`/apps/${appId}/completion-conversations`, { body })
++
++    // Clear localStorage conversation info for this app (essential for explore page)
++    // IMPORTANT: There are two different app IDs in the system:
++    // 1. app.id (used in logs page) 
++    // 2. installedApp.id (used in explore page)
++    // We need to clear conversation IDs for ALL installed apps to prevent 404 errors
++    if (typeof window !== 'undefined') {
++      const conversationIdInfo = JSON.parse(localStorage.getItem(CONVERSATION_ID_INFO) || '{}')
++      console.log(`🔧 Before clearing - ALL conversation IDs in localStorage:`, conversationIdInfo)
++      console.log(`🔧 Before clearing - conversationIdInfo for app ${appId}:`, conversationIdInfo[appId])
++      
++      // Clear conversation ID for the current app (from logs page)
++      let cleared = false
++      if (conversationIdInfo[appId]) {
++        delete conversationIdInfo[appId]
++        cleared = true
++        console.log(`✅ Cleared conversation ID info for app ${appId}`)
++      }
++      
++      // ADDITIONAL FIX: Also clear ALL conversation IDs to prevent explore page 404 errors
++      // Since the explore page uses installedApp.id which is different from app.id
++      const keysToDelete = Object.keys(conversationIdInfo)
++      if (keysToDelete.length > 0) {
++        keysToDelete.forEach(key => {
++          delete conversationIdInfo[key]
++          console.log(`🧹 Cleared conversation ID for ${key} to prevent 404 errors`)
++        })
++        cleared = true
++      }
++      
++      if (cleared) {
++        localStorage.setItem(CONVERSATION_ID_INFO, JSON.stringify(conversationIdInfo))
++        console.log(`✅ All conversation IDs cleared successfully`)
++      } else {
++        console.log(`ℹ️ No conversation ID info found to clear`)
++      }
++      
++      console.log(`🔧 After clearing - ALL conversation IDs in localStorage:`, JSON.parse(localStorage.getItem(CONVERSATION_ID_INFO) || '{}'))
++      
++      // Force trigger localStorage change event
++      window.dispatchEvent(new StorageEvent('storage', {
++        key: CONVERSATION_ID_INFO,
++        oldValue: JSON.stringify(conversationIdInfo),
++        newValue: localStorage.getItem(CONVERSATION_ID_INFO),
++        storageArea: localStorage
++      }))
++    }
++
++    // Clear relevant SWR caches
++    await Promise.all([
++      mutate(`/apps/${appId}/chat-conversations`),
++      mutate(`/apps/${appId}/completion-conversations`),
++      mutate(
++        key => typeof key === 'string' && key.includes(`/installed-apps/${appId}/messages`),
++        undefined,
++        { revalidate: false },
++      ),
++      mutate(
++        key => typeof key === 'string' && key.includes(`/installed-apps/${appId}/conversations`),
++        undefined,
++        { revalidate: false },
++      ),
++      // Clear SWR caches that might be holding references to deleted conversations
++      mutate(
++        key => Array.isArray(key) && key.includes(appId) && (key[0] === 'appConversationData' || key.includes(appId)),
++        undefined,
++        { revalidate: false },
++      ),
++      // Clear conversation generation name caches
++      mutate(
++        key => Array.isArray(key) && key.length === 3 && typeof key[2] === 'string' && key[2].length > 0,
++        undefined,
++        { revalidate: false },
++      ),
++    ])
++
++    console.log(`✅ Cleared completion conversations for app: ${appId}`)
++    return result
++  }
++  catch (error) {
++    console.error('Failed to clear completion conversations:', error)
++    throw error
++  }
++}
