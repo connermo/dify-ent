@@ -1,5 +1,5 @@
 diff --git a/api/controllers/console/app/conversation.py b/api/controllers/console/app/conversation.py
-index 6ddae6fad..efd27bb26 100644
+index 6ddae6fad..005678966 100644
 --- a/api/controllers/console/app/conversation.py
 +++ b/api/controllers/console/app/conversation.py
 @@ -1,6 +1,7 @@
@@ -21,7 +21,7 @@ index 6ddae6fad..efd27bb26 100644
  
  
  class CompletionConversationApi(Resource):
-@@ -96,6 +99,103 @@ class CompletionConversationApi(Resource):
+@@ -96,6 +99,113 @@ class CompletionConversationApi(Resource):
  
          return conversations
  
@@ -108,10 +108,20 @@ index 6ddae6fad..efd27bb26 100644
 +                pass  # Table might not exist in this version
 +
 +        # Delete conversations
-+        db.session.query(Conversation).filter(
-+            Conversation.app_id == app_model.id,
-+            Conversation.mode == "completion"
-+        ).delete()
++        if args['conversation_ids']:
++            # Delete only selected conversations
++            conversation_ids = [str(id) for id in args['conversation_ids']]
++            db.session.query(Conversation).filter(
++                Conversation.app_id == app_model.id,
++                Conversation.mode == "completion",
++                Conversation.id.in_(conversation_ids)
++            ).delete(synchronize_session=False)
++        else:
++            # Delete all conversations for this app
++            db.session.query(Conversation).filter(
++                Conversation.app_id == app_model.id,
++                Conversation.mode == "completion"
++            ).delete()
 +
 +        db.session.commit()
 +
@@ -125,7 +135,7 @@ index 6ddae6fad..efd27bb26 100644
  
  class CompletionConversationDetailApi(Resource):
      @setup_required
-@@ -261,6 +361,105 @@ class ChatConversationApi(Resource):
+@@ -261,6 +371,115 @@ class ChatConversationApi(Resource):
  
          return conversations
  
@@ -214,10 +224,20 @@ index 6ddae6fad..efd27bb26 100644
 +                pass  # Table might not exist in this version
 +
 +        # Delete conversations
-+        db.session.query(Conversation).filter(
-+            Conversation.app_id == app_model.id,
-+            Conversation.mode.in_(["chat", "agent-chat", "advanced-chat"])
-+        ).delete()
++        if args['conversation_ids']:
++            # Delete only selected conversations
++            conversation_ids = [str(id) for id in args['conversation_ids']]
++            db.session.query(Conversation).filter(
++                Conversation.app_id == app_model.id,
++                Conversation.mode.in_(["chat", "agent-chat", "advanced-chat"]),
++                Conversation.id.in_(conversation_ids)
++            ).delete(synchronize_session=False)
++        else:
++            # Delete all conversations for this app
++            db.session.query(Conversation).filter(
++                Conversation.app_id == app_model.id,
++                Conversation.mode.in_(["chat", "agent-chat", "advanced-chat"])
++            ).delete()
 +
 +        db.session.commit()
 +
@@ -231,6 +251,48 @@ index 6ddae6fad..efd27bb26 100644
  
  class ChatConversationDetailApi(Resource):
      @setup_required
+diff --git a/api/services/conversation_service.py b/api/services/conversation_service.py
+index 713c4c678..1137d1235 100644
+--- a/api/services/conversation_service.py
++++ b/api/services/conversation_service.py
+@@ -124,7 +124,17 @@ class ConversationService:
+         else:
+             conversation.name = name
+             conversation.updated_at = naive_utc_now()
+-            db.session.commit()
++            try:
++                db.session.commit()
++            except Exception as e:
++                # Handle case where conversation was deleted after we retrieved it
++                from sqlalchemy.orm.exc import StaleDataError
++                db.session.rollback()
++                if isinstance(e, StaleDataError):
++                    # Conversation was likely deleted, raise ConversationNotExistsError
++                    raise ConversationNotExistsError()
++                else:
++                    raise
+ 
+         return conversation
+ 
+@@ -150,7 +160,17 @@ class ConversationService:
+         except:
+             pass
+ 
+-        db.session.commit()
++        try:
++            db.session.commit()
++        except Exception as e:
++            # Handle case where conversation was deleted after we retrieved it
++            from sqlalchemy.orm.exc import StaleDataError
++            db.session.rollback()
++            if isinstance(e, StaleDataError):
++                # Conversation was likely deleted, raise ConversationNotExistsError
++                raise ConversationNotExistsError()
++            else:
++                raise
+ 
+         return conversation
+ 
 diff --git a/web/app/components/app/log/filter.tsx b/web/app/components/app/log/filter.tsx
 index 6e259a2f1..551966d01 100644
 --- a/web/app/components/app/log/filter.tsx
@@ -708,6 +770,36 @@ index b83e9e6a2..ab07073eb 100644
              </tr>
            })}
          </tbody>
+diff --git a/web/app/components/base/chat/chat-with-history/hooks.tsx b/web/app/components/base/chat/chat-with-history/hooks.tsx
+index 0f437c82b..f90d51387 100644
+--- a/web/app/components/base/chat/chat-with-history/hooks.tsx
++++ b/web/app/components/base/chat/chat-with-history/hooks.tsx
+@@ -155,6 +155,25 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
+   }, [appId, conversationIdInfo, setConversationIdInfo, userId])
+ 
+   const [newConversationId, setNewConversationId] = useState('')
++
++  // Reset newConversationId when conversations are cleared
++  useEffect(() => {
++    const handleStorageChange = (e: StorageEvent) => {
++      if (e.key === CONVERSATION_ID_INFO) {
++        // Check if all conversation IDs were cleared (empty object)
++        const newValue = e.newValue ? JSON.parse(e.newValue) : {}
++        const isEmpty = Object.keys(newValue).length === 0
++        if (isEmpty) {
++          console.log('🔄 Clearing newConversationId due to localStorage clear')
++          setNewConversationId('')
++        }
++      }
++    }
++
++    window.addEventListener('storage', handleStorageChange)
++    return () => window.removeEventListener('storage', handleStorageChange)
++  }, [])
++
+   const chatShouldReloadKey = useMemo(() => {
+     if (currentConversationId === newConversationId)
+       return ''
 diff --git a/web/i18n/en-US/app-log.ts b/web/i18n/en-US/app-log.ts
 index 0d1234050..7e8cb9b6d 100644
 --- a/web/i18n/en-US/app-log.ts
@@ -757,7 +849,7 @@ index 4c1815787..8eab25eec 100644
    workflowTitle: '日志',
    workflowSubtitle: '日志记录了应用的执行情况',
 diff --git a/web/service/log.ts b/web/service/log.ts
-index 4bb4626b8..37322de1f 100644
+index 4bb4626b8..cfa2f3c20 100644
 --- a/web/service/log.ts
 +++ b/web/service/log.ts
 @@ -1,5 +1,7 @@
@@ -769,7 +861,7 @@ index 4bb4626b8..37322de1f 100644
  import type {
    AgentLogDetailRequest,
    AgentLogDetailResponse,
-@@ -78,3 +80,75 @@ export const fetchTracingList: Fetcher<NodeTracingListResponse, { url: string }>
+@@ -78,3 +80,183 @@ export const fetchTracingList: Fetcher<NodeTracingListResponse, { url: string }>
  export const fetchAgentLogDetail = ({ appID, params }: { appID: string; params: AgentLogDetailRequest }) => {
    return get<AgentLogDetailResponse>(`/apps/${appID}/agent/logs`, { params })
  }
@@ -780,22 +872,76 @@ index 4bb4626b8..37322de1f 100644
 +    const body = conversationIds ? { conversation_ids: conversationIds } : {}
 +    const result = await del<any>(`/apps/${appId}/chat-conversations`, { body })
 +
-+    // Clear localStorage conversation info
++    // Clear localStorage conversation info for this app (essential for explore page)
++    // IMPORTANT: There are two different app IDs in the system:
++    // 1. app.id (used in logs page) 
++    // 2. installedApp.id (used in explore page)
++    // We need to clear conversation IDs for ALL installed apps to prevent 404 errors
 +    if (typeof window !== 'undefined') {
 +      const conversationIdInfo = JSON.parse(localStorage.getItem(CONVERSATION_ID_INFO) || '{}')
++      console.log(`🔧 Before clearing - ALL conversation IDs in localStorage:`, conversationIdInfo)
++      console.log(`🔧 Before clearing - conversationIdInfo for app ${appId}:`, conversationIdInfo[appId])
++      
++      // Clear conversation ID for the current app (from logs page)
++      let cleared = false
 +      if (conversationIdInfo[appId]) {
 +        delete conversationIdInfo[appId]
-+        localStorage.setItem(CONVERSATION_ID_INFO, JSON.stringify(conversationIdInfo))
++        cleared = true
++        console.log(`✅ Cleared conversation ID info for app ${appId}`)
 +      }
++      
++      // ADDITIONAL FIX: Also clear ALL conversation IDs to prevent explore page 404 errors
++      // Since the explore page uses installedApp.id which is different from app.id
++      const keysToDelete = Object.keys(conversationIdInfo)
++      if (keysToDelete.length > 0) {
++        keysToDelete.forEach(key => {
++          delete conversationIdInfo[key]
++          console.log(`🧹 Cleared conversation ID for ${key} to prevent 404 errors`)
++        })
++        cleared = true
++      }
++      
++      if (cleared) {
++        localStorage.setItem(CONVERSATION_ID_INFO, JSON.stringify(conversationIdInfo))
++        console.log(`✅ All conversation IDs cleared successfully`)
++      } else {
++        console.log(`ℹ️ No conversation ID info found to clear`)
++      }
++      
++      console.log(`🔧 After clearing - ALL conversation IDs in localStorage:`, JSON.parse(localStorage.getItem(CONVERSATION_ID_INFO) || '{}'))
++      
++      // Force trigger localStorage change event
++      window.dispatchEvent(new StorageEvent('storage', {
++        key: CONVERSATION_ID_INFO,
++        oldValue: JSON.stringify(conversationIdInfo),
++        newValue: localStorage.getItem(CONVERSATION_ID_INFO),
++        storageArea: localStorage
++      }))
 +    }
 +
-+    // Clear SWR caches
++    // Clear relevant SWR caches
 +    await Promise.all([
 +      mutate(`/apps/${appId}/chat-conversations`),
 +      mutate(`/apps/${appId}/completion-conversations`),
 +      mutate(
-+        key =>
-+          typeof key === 'string' && key.includes('/explore/apps'),
++        key => typeof key === 'string' && key.includes(`/installed-apps/${appId}/messages`),
++        undefined,
++        { revalidate: false },
++      ),
++      mutate(
++        key => typeof key === 'string' && key.includes(`/installed-apps/${appId}/conversations`),
++        undefined,
++        { revalidate: false },
++      ),
++      // Clear SWR caches that might be holding references to deleted conversations
++      mutate(
++        key => Array.isArray(key) && key.includes(appId) && (key[0] === 'appConversationData' || key.includes(appId)),
++        undefined,
++        { revalidate: false },
++      ),
++      // Clear conversation generation name caches
++      mutate(
++        key => Array.isArray(key) && key.length === 3 && typeof key[2] === 'string' && key[2].length > 0,
 +        undefined,
 +        { revalidate: false },
 +      ),
@@ -816,22 +962,76 @@ index 4bb4626b8..37322de1f 100644
 +    const body = conversationIds ? { conversation_ids: conversationIds } : {}
 +    const result = await del<any>(`/apps/${appId}/completion-conversations`, { body })
 +
-+    // Clear localStorage conversation info
++    // Clear localStorage conversation info for this app (essential for explore page)
++    // IMPORTANT: There are two different app IDs in the system:
++    // 1. app.id (used in logs page) 
++    // 2. installedApp.id (used in explore page)
++    // We need to clear conversation IDs for ALL installed apps to prevent 404 errors
 +    if (typeof window !== 'undefined') {
 +      const conversationIdInfo = JSON.parse(localStorage.getItem(CONVERSATION_ID_INFO) || '{}')
++      console.log(`🔧 Before clearing - ALL conversation IDs in localStorage:`, conversationIdInfo)
++      console.log(`🔧 Before clearing - conversationIdInfo for app ${appId}:`, conversationIdInfo[appId])
++      
++      // Clear conversation ID for the current app (from logs page)
++      let cleared = false
 +      if (conversationIdInfo[appId]) {
 +        delete conversationIdInfo[appId]
-+        localStorage.setItem(CONVERSATION_ID_INFO, JSON.stringify(conversationIdInfo))
++        cleared = true
++        console.log(`✅ Cleared conversation ID info for app ${appId}`)
 +      }
++      
++      // ADDITIONAL FIX: Also clear ALL conversation IDs to prevent explore page 404 errors
++      // Since the explore page uses installedApp.id which is different from app.id
++      const keysToDelete = Object.keys(conversationIdInfo)
++      if (keysToDelete.length > 0) {
++        keysToDelete.forEach(key => {
++          delete conversationIdInfo[key]
++          console.log(`🧹 Cleared conversation ID for ${key} to prevent 404 errors`)
++        })
++        cleared = true
++      }
++      
++      if (cleared) {
++        localStorage.setItem(CONVERSATION_ID_INFO, JSON.stringify(conversationIdInfo))
++        console.log(`✅ All conversation IDs cleared successfully`)
++      } else {
++        console.log(`ℹ️ No conversation ID info found to clear`)
++      }
++      
++      console.log(`🔧 After clearing - ALL conversation IDs in localStorage:`, JSON.parse(localStorage.getItem(CONVERSATION_ID_INFO) || '{}'))
++      
++      // Force trigger localStorage change event
++      window.dispatchEvent(new StorageEvent('storage', {
++        key: CONVERSATION_ID_INFO,
++        oldValue: JSON.stringify(conversationIdInfo),
++        newValue: localStorage.getItem(CONVERSATION_ID_INFO),
++        storageArea: localStorage
++      }))
 +    }
 +
-+    // Clear SWR caches
++    // Clear relevant SWR caches
 +    await Promise.all([
 +      mutate(`/apps/${appId}/chat-conversations`),
 +      mutate(`/apps/${appId}/completion-conversations`),
 +      mutate(
-+        key =>
-+          typeof key === 'string' && key.includes('/explore/apps'),
++        key => typeof key === 'string' && key.includes(`/installed-apps/${appId}/messages`),
++        undefined,
++        { revalidate: false },
++      ),
++      mutate(
++        key => typeof key === 'string' && key.includes(`/installed-apps/${appId}/conversations`),
++        undefined,
++        { revalidate: false },
++      ),
++      // Clear SWR caches that might be holding references to deleted conversations
++      mutate(
++        key => Array.isArray(key) && key.includes(appId) && (key[0] === 'appConversationData' || key.includes(appId)),
++        undefined,
++        { revalidate: false },
++      ),
++      // Clear conversation generation name caches
++      mutate(
++        key => Array.isArray(key) && key.length === 3 && typeof key[2] === 'string' && key[2].length > 0,
 +        undefined,
 +        { revalidate: false },
 +      ),
