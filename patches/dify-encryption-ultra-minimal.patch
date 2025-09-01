@@ -1,0 +1,80 @@
+diff --git a/api/models/model.py b/api/models/model.py
+index c4303f3cc..d8f5c2ea1 100644
+--- a/api/models/model.py
++++ b/api/models/model.py
+@@ -899,12 +899,12 @@ class Message(Base):
+     override_model_configs = mapped_column(sa.Text)
+     conversation_id = mapped_column(StringUUID, sa.ForeignKey("conversations.id"), nullable=False)
+     _inputs: Mapped[dict] = mapped_column("inputs", sa.JSON)
+-    query: Mapped[str] = mapped_column(sa.Text, nullable=False)
++    _query: Mapped[str] = mapped_column("query", sa.Text, nullable=False)
+     message = mapped_column(sa.JSON, nullable=False)
+     message_tokens: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
+     message_unit_price = mapped_column(sa.Numeric(10, 4), nullable=False)
+     message_price_unit = mapped_column(sa.Numeric(10, 7), nullable=False, server_default=sa.text("0.001"))
+-    answer: Mapped[str] = db.Column(sa.Text, nullable=False)  # TODO make it mapped_column
++    _answer: Mapped[str] = db.Column("answer", sa.Text, nullable=False)  # TODO make it mapped_column
+     answer_tokens: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
+     answer_unit_price = mapped_column(sa.Numeric(10, 4), nullable=False)
+     answer_price_unit = mapped_column(sa.Numeric(10, 7), nullable=False, server_default=sa.text("0.001"))
+@@ -1224,6 +1224,46 @@ class Message(Base):
+             workflow_run_id=data["workflow_run_id"],
+         )
+ 
++    def _get_encryption_key_id(self):
++        """Get stable encryption key ID from config"""
++        if hasattr(self, '_cached_key_id'):
++            return self._cached_key_id
++        
++        # Use fixed key ID from config instead of changeable tenant_id
++        from configs import dify_config
++        self._cached_key_id = dify_config.ENCRYPTION_KEY_ID or 'dify_default_2025'
++        return self._cached_key_id
++
++    @property
++    def query(self):
++        """Transparently decrypt user query"""
++        if not self._query or not self._query.startswith("ENC:"):
++            return self._query or ""
++        try:
++            from core.helper import encrypter
++            key_id = self._get_encryption_key_id()
++            return encrypter.decrypt_token(key_id, self._query[4:]) if key_id else self._query
++        except Exception:
++            return self._query.replace("ENC:", "") if self._query else ""
++
++    @query.setter  
++    def query(self, value):
++        """Transparently encrypt user query"""
++        try:
++            from core.helper import encrypter
++            key_id = self._get_encryption_key_id()
++            self._query = f"ENC:{encrypter.encrypt_token(key_id, value)}" if key_id and value else value or ""
++        except Exception:
++            self._query = value or ""
++
++    @property
++    def answer(self):
++        """Transparently decrypt AI answer"""
++        if not self._answer or not self._answer.startswith("ENC:"):
++            return self._answer or ""
++        try:
++            from core.helper import encrypter
++            key_id = self._get_encryption_key_id()
++            return encrypter.decrypt_token(key_id, self._answer[4:]) if key_id else self._answer
++        except Exception:
++            return self._answer.replace("ENC:", "") if self._answer else ""
++
++    @answer.setter
++    def answer(self, value):
++        """Transparently encrypt AI answer"""
++        try:
++            from core.helper import encrypter
++            key_id = self._get_encryption_key_id()
++            self._answer = f"ENC:{encrypter.encrypt_token(key_id, value)}" if key_id and value else value or ""
++        except Exception:
++            self._answer = value or ""
++
+ 
+ class MessageFeedback(Base):
+     __tablename__ = "message_feedbacks"
