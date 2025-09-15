@@ -1,8 +1,30 @@
+diff --git a/api/configs/feature/__init__.py b/api/configs/feature/__init__.py
+index 7638cd189..275de4919 100644
+--- a/api/configs/feature/__init__.py
++++ b/api/configs/feature/__init__.py
+@@ -56,6 +56,17 @@ class SecurityConfig(BaseSettings):
+         default=None,
+     )
+ 
++    # Message encryption configuration
++    MESSAGE_ENCRYPTION_ENABLED: bool = Field(
++        description="Enable or disable encryption for message queries and answers stored in database",
++        default=False,
++    )
++
++    ENCRYPTION_KEY_ID: Optional[str] = Field(
++        description="Encryption key ID for message encryption. If not provided, uses default key 'dify_default_2025'",
++        default=None,
++    )
++
+ 
+ class AppExecutionConfig(BaseSettings):
+     """
 diff --git a/api/models/model.py b/api/models/model.py
-index c4303f3cc..d8f5c2ea1 100644
+index fbebdc817..508dac442 100644
 --- a/api/models/model.py
 +++ b/api/models/model.py
-@@ -899,12 +899,12 @@ class Message(Base):
+@@ -898,12 +898,12 @@ class Message(Base):
      override_model_configs = mapped_column(sa.Text)
      conversation_id = mapped_column(StringUUID, sa.ForeignKey("conversations.id"), nullable=False)
      _inputs: Mapped[dict] = mapped_column("inputs", sa.JSON)
@@ -12,12 +34,12 @@ index c4303f3cc..d8f5c2ea1 100644
      message_tokens: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
      message_unit_price = mapped_column(sa.Numeric(10, 4), nullable=False)
      message_price_unit = mapped_column(sa.Numeric(10, 7), nullable=False, server_default=sa.text("0.001"))
--    answer: Mapped[str] = db.Column(sa.Text, nullable=False)  # TODO make it mapped_column
-+    _answer: Mapped[str] = db.Column("answer", sa.Text, nullable=False)  # TODO make it mapped_column
+-    answer: Mapped[str] = mapped_column(sa.Text, nullable=False)
++    _answer: Mapped[str] = mapped_column("answer", sa.Text, nullable=False)
      answer_tokens: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
      answer_unit_price = mapped_column(sa.Numeric(10, 4), nullable=False)
      answer_price_unit = mapped_column(sa.Numeric(10, 7), nullable=False, server_default=sa.text("0.001"))
-@@ -1224,6 +1224,46 @@ class Message(Base):
+@@ -1223,6 +1223,71 @@ class Message(Base):
              workflow_run_id=data["workflow_run_id"],
          )
  
@@ -25,11 +47,16 @@ index c4303f3cc..d8f5c2ea1 100644
 +        """Get stable encryption key ID from config"""
 +        if hasattr(self, '_cached_key_id'):
 +            return self._cached_key_id
-+        
++
 +        # Use fixed key ID from config instead of changeable tenant_id
 +        from configs import dify_config
 +        self._cached_key_id = dify_config.ENCRYPTION_KEY_ID or 'dify_default_2025'
 +        return self._cached_key_id
++
++    def _is_encryption_enabled(self):
++        """Check if message encryption is enabled in config"""
++        from configs import dify_config
++        return dify_config.MESSAGE_ENCRYPTION_ENABLED
 +
 +    @property
 +    def query(self):
@@ -43,9 +70,12 @@ index c4303f3cc..d8f5c2ea1 100644
 +        except Exception:
 +            return self._query.replace("ENC:", "") if self._query else ""
 +
-+    @query.setter  
++    @query.setter
 +    def query(self, value):
 +        """Transparently encrypt user query"""
++        if not self._is_encryption_enabled():
++            self._query = value or ""
++            return
 +        try:
 +            from core.helper import encrypter
 +            key_id = self._get_encryption_key_id()
@@ -68,6 +98,9 @@ index c4303f3cc..d8f5c2ea1 100644
 +    @answer.setter
 +    def answer(self, value):
 +        """Transparently encrypt AI answer"""
++        if not self._is_encryption_enabled():
++            self._answer = value or ""
++            return
 +        try:
 +            from core.helper import encrypter
 +            key_id = self._get_encryption_key_id()
