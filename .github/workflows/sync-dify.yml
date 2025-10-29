@@ -235,6 +235,15 @@ jobs:
           # Always set this for consistency
           echo "UPSTREAM_SRC=dify" >> $GITHUB_ENV
 
+      - name: Calculate SSO patches hash
+        if: steps.check-updates.outputs.updates == 'true'
+        id: patches-hash
+        run: |
+          # Calculate hash of all SSO patch files to bust Docker cache when patches change
+          PATCHES_HASH=$(cat patches/sso-*.patch | sha256sum | cut -d' ' -f1)
+          echo "patches_hash=${PATCHES_HASH}" >> $GITHUB_OUTPUT
+          echo "📋 SSO Patches Hash: ${PATCHES_HASH}"
+
       - name: Apply SSO integration patches
         if: steps.check-updates.outputs.updates == 'true'
         run: |
@@ -382,6 +391,7 @@ jobs:
             type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:cache,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+            SSO_PATCHES_HASH=${{ steps.patches-hash.outputs.patches_hash }}
 
       - name: Build and push Web image
         if: steps.check-updates.outputs.updates == 'true'
@@ -405,6 +415,7 @@ jobs:
             type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:cache,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+            SSO_PATCHES_HASH=${{ steps.patches-hash.outputs.patches_hash }}
 
       - name: Build and push Worker image
         if: steps.check-updates.outputs.updates == 'true'
@@ -429,6 +440,7 @@ jobs:
           build-args: |
             BUILDKIT_INLINE_CACHE=1
             SERVICE_TYPE=worker
+            SSO_PATCHES_HASH=${{ steps.patches-hash.outputs.patches_hash }}
 
       - name: Make packages public
         if: steps.check-updates.outputs.updates == 'true'
