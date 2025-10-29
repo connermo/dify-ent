@@ -339,21 +339,6 @@ jobs:
           echo "  - OAuth providers API: ✅"
           echo "  - KeycloakOAuth class: ✅"
 
-          # Apply other feature patches if they exist
-          cd dify
-
-          if [ -f "../patches/clear-logs-final-clean.patch" ]; then
-            echo "📝 Applying clear-logs-final-clean.patch..."
-            git apply "../patches/clear-logs-final-clean.patch" || echo "⚠️  Clear logs patch application failed, continuing..."
-          fi
-
-          if [ -f "../patches/dify-encryption-complete.patch" ]; then
-            echo "📝 Applying dify-encryption-complete.patch..."
-            git apply "../patches/dify-encryption-complete.patch" || echo "⚠️  Encryption patch application failed, continuing..."
-          fi
-
-          cd ..
-
       - name: Setup Docker Buildx
         if: steps.check-updates.outputs.updates == 'true'
         uses: docker/setup-buildx-action@v3
