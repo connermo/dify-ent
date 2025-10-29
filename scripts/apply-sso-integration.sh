@@ -33,17 +33,21 @@ try:
         print("✅ Keycloak configuration already exists")
         sys.exit(0)
     
+    # Detect the format used in the file (Optional[str] or str | None)
+    use_modern_syntax = 'str | None' in content[:2000]  # Check first 2000 chars for type hints
+    type_hint = 'str | None' if use_modern_syntax else 'Optional[str]'
+    
     # Find the location after GOOGLE_CLIENT_SECRET
-    keycloak_config = '''    # Keycloak (OIDC/OAuth2) optional settings for console social login
-    KEYCLOAK_CLIENT_ID: Optional[str] = Field(
+    keycloak_config = f'''    # Keycloak (OIDC/OAuth2) optional settings for console social login
+    KEYCLOAK_CLIENT_ID: {type_hint} = Field(
         description="Keycloak OAuth client ID",
         default=None,
     )
-    KEYCLOAK_CLIENT_SECRET: Optional[str] = Field(
+    KEYCLOAK_CLIENT_SECRET: {type_hint} = Field(
         description="Keycloak OAuth client secret",
         default=None,
     )
-    KEYCLOAK_ISSUER_URL: Optional[str] = Field(
+    KEYCLOAK_ISSUER_URL: {type_hint} = Field(
         description="Keycloak issuer url, e.g. http://localhost:8080/realms/dify",
         default=None,
     )'''
