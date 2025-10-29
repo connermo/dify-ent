@@ -244,6 +244,23 @@ jobs:
           echo "patches_hash=${PATCHES_HASH}" >> $GITHUB_OUTPUT
           echo "📋 SSO Patches Hash: ${PATCHES_HASH}"
 
+          # Check if patches hash changed from last build
+          LAST_HASH=""
+          if [ -f ".sso-patches-hash" ]; then
+            LAST_HASH=$(cat .sso-patches-hash)
+          fi
+
+          if [ "$LAST_HASH" != "$PATCHES_HASH" ]; then
+            echo "patches_changed=true" >> $GITHUB_OUTPUT
+            echo "🔄 SSO patches changed (old: ${LAST_HASH:-none}, new: ${PATCHES_HASH})"
+          else
+            echo "patches_changed=false" >> $GITHUB_OUTPUT
+            echo "✅ SSO patches unchanged"
+          fi
+
+          # Save current hash for next build
+          echo "${PATCHES_HASH}" > .sso-patches-hash
+
       - name: Apply SSO integration patches
         if: steps.check-updates.outputs.updates == 'true'
         run: |
@@ -348,6 +365,11 @@ jobs:
           echo "  - OAuth providers API: ✅"
           echo "  - KeycloakOAuth class: ✅"
 
+          # Create marker files with patch hash to bust Docker cache
+          echo "${{ steps.patches-hash.outputs.patches_hash }}" > api/.sso-patches-version
+          echo "${{ steps.patches-hash.outputs.patches_hash }}" > web/.sso-patches-version
+          echo "📝 Created cache busting marker files with hash: ${{ steps.patches-hash.outputs.patches_hash }}"
+
       - name: Setup Docker Buildx
         if: steps.check-updates.outputs.updates == 'true'
         uses: docker/setup-buildx-action@v3
@@ -376,6 +398,7 @@ jobs:
           context: ${{ env.UPSTREAM_SRC }}/api
           platforms: ${{ env.BUILD_PLATFORMS }}
           push: true
+          no-cache: ${{ steps.patches-hash.outputs.patches_changed == 'true' }}
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ env.UPSTREAM_RELEASE_TAG }}
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
@@ -400,6 +423,7 @@ jobs:
           context: ${{ env.UPSTREAM_SRC }}/web
           platforms: ${{ env.BUILD_PLATFORMS }}
           push: true
+          no-cache: ${{ steps.patches-hash.outputs.patches_changed == 'true' }}
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:${{ env.UPSTREAM_RELEASE_TAG }}
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
@@ -424,6 +448,7 @@ jobs:
           context: ${{ env.UPSTREAM_SRC }}/api
           platforms: ${{ env.BUILD_PLATFORMS }}
           push: true
+          no-cache: ${{ steps.patches-hash.outputs.patches_changed == 'true' }}
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ env.UPSTREAM_RELEASE_TAG }}
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
@@ -479,7 +504,10 @@ jobs:
         run: |
           # Record the upstream release tag
           echo "${{ env.UPSTREAM_RELEASE_TAG }}" > LAST_UPSTREAM_RELEASE
-          
+
+          # Add SSO patches hash file for tracking
+          git add .sso-patches-hash
+
           git add .
           if git diff --staged --quiet; then
             echo "No changes to commit"
