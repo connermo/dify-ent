@@ -266,10 +266,10 @@ try:
         # Update existing Keycloak references to SSO (if needed)
         if 'RiUserLine' not in content:
             # Add RiUserLine import if not present
-            if 'from \'@remixicon/react\'' not in content:
+            if 'from "@remixicon/react"' not in content and "from '@remixicon/react'" not in content:
                 content = re.sub(
-                    r'(import.*from \'react-i18next\')',
-                    r'\1\nimport { RiUserLine } from \'@remixicon/react\'',
+                    r'(import.*from [\'"]react-i18next[\'"])',
+                    r"\1\nimport { RiUserLine } from '@remixicon/react'",
                     content
                 )
             # Replace old SSO icon with RiUserLine
@@ -283,10 +283,10 @@ try:
             print("✅ SSO icon already using RiUserLine")
     else:
         # Add RiUserLine import if not present
-        if 'from \'@remixicon/react\'' not in content:
+        if 'from "@remixicon/react"' not in content and "from '@remixicon/react'" not in content:
             content = re.sub(
-                r'(import.*from \'react-i18next\')',
-                r'\1\nimport { RiUserLine } from \'@remixicon/react\'',
+                r'(import.*from [\'"]react-i18next[\'"])',
+                r"\1\nimport { RiUserLine } from '@remixicon/react'",
                 content
             )
         
