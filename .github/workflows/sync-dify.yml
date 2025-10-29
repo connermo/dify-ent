@@ -371,19 +371,13 @@ jobs:
           context: ${{ env.UPSTREAM_SRC }}/web
           platforms: ${{ env.BUILD_PLATFORMS }}
           push: true
+          no-cache: true
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:${{ env.UPSTREAM_RELEASE_TAG }}
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
             ${{ env.DOCKERHUB_USERNAME }}/dify-web:${{ env.UPSTREAM_RELEASE_TAG }}
             ${{ env.DOCKERHUB_USERNAME }}/dify-web:latest
           provenance: false
-          cache-from: |
-            type=gha
-            type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:${{ env.UPSTREAM_RELEASE_TAG }}
-            type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
-          cache-to: |
-            type=gha,mode=max
-            type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:cache,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
 

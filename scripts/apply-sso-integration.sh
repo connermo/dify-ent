@@ -446,17 +446,74 @@ try:
         content = f.read()
     
     # Check if providers are already being fetched and passed
-    if 'providers' in content and 'SocialAuth' in content:
-        # Check if providers are passed to SocialAuth
-        if 'providers=' in content or 'providers: ' in content:
-            print("✅ Providers already being passed to SocialAuth")
-        else:
-            print("⚠️  Providers defined but not passed to SocialAuth - manual update may be needed")
-    else:
-        print("⚠️  No providers handling found in normal-form.tsx - manual update may be needed")
+    if 'oauthProviders' in content and 'setOauthProviders' in content:
+        print("✅ OAuth providers handling already exists in normal-form.tsx")
+        sys.exit(0)
+    
+    # Step 1: Add API_PREFIX to imports if not present
+    if 'API_PREFIX' not in content:
+        content = re.sub(
+            r"(import.*IS_CE_EDITION.*from '@/config')",
+            r"import { IS_CE_EDITION, API_PREFIX } from '@/config'",
+            content
+        )
+    
+    # Step 2: Add oauthProviders state after workspaceName state
+    if 'oauthProviders' not in content:
+        content = re.sub(
+            r"(const \[workspaceName, setWorkSpaceName\] = useState\(''\))",
+            r"\1\n  const [oauthProviders, setOauthProviders] = useState<{github?: boolean, google?: boolean, keycloak?: boolean}>({})",
+            content
+        )
+    
+    # Step 3: Add fetch call in init function before the closing brace
+    if 'fetch(`${API_PREFIX}/oauth/providers`)' not in content:
+        # Find the init function and add the fetch logic
+        fetch_code = '''      
+      // Fetch available OAuth providers
+      if (systemFeatures.enable_social_oauth_login) {
+        try {
+          const response = await fetch(`${API_PREFIX}/oauth/providers`)
+          if (response.ok) {
+            const data = await response.json()
+            setOauthProviders(data.providers || {})
+          }
+        } catch (error) {
+          console.error('Failed to fetch OAuth providers:', error)
+        }
+      }'''
         
+        # Insert before the closing of init function - find pattern "    }\n  }, [])"
+        content = re.sub(
+            r'(updateAuthType\(systemFeatures\.enable_email_password_login \? \'password\' : \'code\'\))\n(    \}\n  \}, \[\])',
+            r'\1' + fetch_code + '\n\2',
+            content
+        )
+    
+    # Step 4: Update SocialAuth component to pass providers
+    if '<SocialAuth ' in content and 'providers=' not in content:
+        content = re.sub(
+            r'<SocialAuth\s+disabled={allMethodsAreDisabled}\s*/>',
+            r'<SocialAuth disabled={allMethodsAreDisabled} providers={oauthProviders} />',
+            content
+        )
+        content = re.sub(
+            r'<SocialAuth\s+/>',
+            r'<SocialAuth providers={oauthProviders} />',
+            content
+        )
+    
+    # Write back to file
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
+    print("✅ Updated normal-form.tsx with OAuth providers handling")
+
 except Exception as e:
-    print(f"⚠️  Error checking normal-form.tsx: {e}")
+    print(f"❌ Error updating normal-form.tsx: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 
 PYTHON_SCRIPT2
     fi
