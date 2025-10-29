@@ -126,24 +126,49 @@ jobs:
             PREV_TAG=""
           fi
           
-          # Check if there are patch file changes in the current commit
-          PATCH_CHANGES=$(git diff HEAD~1 --name-only | grep '\.patch$' || echo "")
-          WORKFLOW_CHANGES=$(git diff HEAD~1 --name-only | grep '.github/workflows/sync-dify.yml' || echo "")
+          # Check if there are patch file changes in recent commits (last 5 commits)
+          PATCH_CHANGES=$(git diff HEAD~5 --name-only | grep '\.patch$' || echo "")
+          WORKFLOW_CHANGES=$(git diff HEAD~5 --name-only | grep '.github/workflows/sync-dify.yml' || echo "")
+          SCRIPT_CHANGES=$(git diff HEAD~5 --name-only | grep '^scripts/' || echo "")
           
-          if [ "$PREV_TAG" = "$UPSTREAM_RELEASE_TAG" ] && [ "${{ github.event.inputs.force_sync }}" != "true" ] && [ -z "$PATCH_CHANGES" ] && [ -z "$WORKFLOW_CHANGES" ]; then
-            echo "updates=false" >> $GITHUB_OUTPUT
-            echo "Already at latest upstream release $UPSTREAM_RELEASE_TAG and no patch changes"
-          else
+          # Check for any new patch files that were added
+          NEW_PATCHES=$(git diff --cached --name-only | grep '\.patch$' || git ls-files patches/*.patch 2>/dev/null | grep -v "^\.git" || echo "")
+          
+          echo "Previous tag: $PREV_TAG"
+          echo "Current tag: $UPSTREAM_RELEASE_TAG"
+          echo "Force sync: ${{ github.event.inputs.force_sync }}"
+          echo "Patch changes: $PATCH_CHANGES"
+          echo "Workflow changes: $WORKFLOW_CHANGES"
+          echo "Script changes: $SCRIPT_CHANGES"
+          
+          # Always build if:
+          # 1. Force sync is enabled
+          # 2. Version changed
+          # 3. There are patch/script/workflow changes
+          # 4. LAST_UPSTREAM_RELEASE file doesn't exist (first run)
+          if [ "${{ github.event.inputs.force_sync }}" = "true" ]; then
             echo "updates=true" >> $GITHUB_OUTPUT
-            if [ "$PREV_TAG" != "$UPSTREAM_RELEASE_TAG" ]; then
-              echo "Will update from '$PREV_TAG' to '$UPSTREAM_RELEASE_TAG'"
-            fi
+            echo "Force sync enabled - will build images"
+          elif [ "$PREV_TAG" != "$UPSTREAM_RELEASE_TAG" ]; then
+            echo "updates=true" >> $GITHUB_OUTPUT
+            echo "Version changed from '$PREV_TAG' to '$UPSTREAM_RELEASE_TAG' - will build images"
+          elif [ -z "$PREV_TAG" ]; then
+            echo "updates=true" >> $GITHUB_OUTPUT
+            echo "First run (no LAST_UPSTREAM_RELEASE) - will build images"
+          elif [ -n "$PATCH_CHANGES" ] || [ -n "$WORKFLOW_CHANGES" ] || [ -n "$SCRIPT_CHANGES" ]; then
+            echo "updates=true" >> $GITHUB_OUTPUT
             if [ -n "$PATCH_CHANGES" ]; then
-              echo "Patch file changes detected: $PATCH_CHANGES"
+              echo "Patch file changes detected: $PATCH_CHANGES - will rebuild images"
             fi
             if [ -n "$WORKFLOW_CHANGES" ]; then
-              echo "Workflow changes detected"
+              echo "Workflow changes detected - will rebuild images"
             fi
+            if [ -n "$SCRIPT_CHANGES" ]; then
+              echo "Script changes detected: $SCRIPT_CHANGES - will rebuild images"
+            fi
+          else
+            echo "updates=false" >> $GITHUB_OUTPUT
+            echo "Already at latest upstream release $UPSTREAM_RELEASE_TAG and no changes detected"
           fi
 
       - name: Prepare workspace
