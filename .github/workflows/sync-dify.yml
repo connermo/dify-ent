@@ -23,6 +23,7 @@ on:
       - 'dify/docker/docker-compose.yaml'
       - '*.patch'
       - 'scripts/**'
+      - 'LAST_UPSTREAM_RELEASE'
 
 env:
   UPSTREAM_REPO: langgenius/dify
