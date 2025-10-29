@@ -26,6 +26,7 @@ on:
       - 'patches/**'
       - 'scripts/**'
       - 'LAST_UPSTREAM_RELEASE'
+      - 'trigger-build.txt'
 
 env:
   UPSTREAM_REPO: langgenius/dify
