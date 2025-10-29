@@ -17,27 +17,111 @@ cd dify
 
 echo "📝 Step 1: Adding Keycloak configuration to api/configs/feature/__init__.py..."
 
-# Add Keycloak configuration after Google OAuth settings
+# Add Keycloak configuration after Google OAuth settings using Python for reliability
+python3 << 'PYTHON_SCRIPT'
+import re
+import sys
+
+file_path = "api/configs/feature/__init__.py"
+
+try:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Check if Keycloak config already exists
+    if 'KEYCLOAK_CLIENT_ID' in content:
+        print("✅ Keycloak configuration already exists")
+        sys.exit(0)
+    
+    # Find the location after GOOGLE_CLIENT_SECRET
+    keycloak_config = '''    # Keycloak (OIDC/OAuth2) optional settings for console social login
+    KEYCLOAK_CLIENT_ID: Optional[str] = Field(
+        description="Keycloak OAuth client ID",
+        default=None,
+    )
+    KEYCLOAK_CLIENT_SECRET: Optional[str] = Field(
+        description="Keycloak OAuth client secret",
+        default=None,
+    )
+    KEYCLOAK_ISSUER_URL: Optional[str] = Field(
+        description="Keycloak issuer url, e.g. http://localhost:8080/realms/dify",
+        default=None,
+    )'''
+    
+    # Find GOOGLE_CLIENT_SECRET field definition - handle multi-line Field() definitions
+    # Pattern 1: Single line with Field() all on one line
+    pattern1 = r'(GOOGLE_CLIENT_SECRET[^\n]*default=None[^\n]*\n)'
+    
+    # Pattern 2: Multi-line Field() definition
+    pattern2 = r'(GOOGLE_CLIENT_SECRET[^\n]*\n[^\n]*Field\([^\)]*default=None[^\)]*\)[^\n]*\n)'
+    
+    # Pattern 3: Multi-line with description
+    pattern3 = r'(GOOGLE_CLIENT_SECRET[^\n]*\n[^\n]*Field\([^\)]*description[^\)]*\n[^\)]*default=None[^\)]*\)[^\n]*\n)'
+    
+    # Find the end of GOOGLE_CLIENT_SECRET field (including closing parenthesis and newline)
+    # Look for GOOGLE_CLIENT_SECRET followed by Field definition ending with default=None
+    found = False
+    
+    # Try to find the complete GOOGLE_CLIENT_SECRET field definition
+    # Match: GOOGLE_CLIENT_SECRET ... Field(... default=None ...) with proper indentation
+    google_secret_pattern = r'(GOOGLE_CLIENT_SECRET\s*:\s*Optional\[str\]\s*=\s*Field\([^\)]*default=None[^\)]*\)\s*\n)'
+    match = re.search(google_secret_pattern, content, re.MULTILINE)
+    
+    if match:
+        # Insert after the matched field
+        insert_pos = match.end()
+        content = content[:insert_pos] + keycloak_config + '\n' + content[insert_pos:]
+        found = True
+    else:
+        # Try alternative: find GOOGLE_CLIENT_SECRET and Field on separate lines
+        google_secret_pattern2 = r'(GOOGLE_CLIENT_SECRET\s*:\s*Optional\[str\]\s*=\s*Field\([^)]*\n[^)]*\n[^)]*default=None[^)]*\n[^)]*\)\s*\n)'
+        match2 = re.search(google_secret_pattern2, content, re.MULTILINE | re.DOTALL)
+        if match2:
+            insert_pos = match2.end()
+            content = content[:insert_pos] + keycloak_config + '\n' + content[insert_pos:]
+            found = True
+    
+    if found:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print("✅ Added Keycloak configuration")
+    else:
+        # Fallback: find GOOGLE_CLIENT_SECRET line and insert after the next non-indented line or class boundary
+        google_lines = [i for i, line in enumerate(content.split('\n')) if 'GOOGLE_CLIENT_SECRET' in line]
+        if google_lines:
+            # Find the end of the Field() definition after GOOGLE_CLIENT_SECRET
+            start_idx = content.find('GOOGLE_CLIENT_SECRET')
+            if start_idx >= 0:
+                # Look for the closing parenthesis and newline after default=None
+                search_from = start_idx
+                # Find the next closing parenthesis followed by newline
+                paren_match = re.search(r'\)\s*\n', content[search_from:search_from+500])
+                if paren_match:
+                    insert_pos = search_from + paren_match.end()
+                    content = content[:insert_pos] + keycloak_config + '\n' + content[insert_pos:]
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    print("✅ Added Keycloak configuration (fallback method)")
+                    found = True
+        
+        if not found:
+            print("❌ Error: Could not find GOOGLE_CLIENT_SECRET to insert Keycloak config")
+            print("File search context:")
+            # Show context around Google OAuth settings
+            if 'GOOGLE_CLIENT_SECRET' in content:
+                idx = content.find('GOOGLE_CLIENT_SECRET')
+                print(content[max(0, idx-100):idx+300])
+            sys.exit(1)
+
+except Exception as e:
+    print(f"❌ Error adding Keycloak configuration: {e}")
+    sys.exit(1)
+PYTHON_SCRIPT
+
+# Verify the configuration was added
 if ! grep -q "KEYCLOAK_CLIENT_ID" api/configs/feature/__init__.py; then
-    # Find the line with GOOGLE_CLIENT_SECRET and add Keycloak config after it
-    sed -i.bak '/GOOGLE_CLIENT_SECRET.*default=None/a\
-\
-    # Keycloak (OIDC/OAuth2) optional settings for console social login\
-    KEYCLOAK_CLIENT_ID: Optional[str] = Field(\
-        description="Keycloak OAuth client ID",\
-        default=None,\
-    )\
-    KEYCLOAK_CLIENT_SECRET: Optional[str] = Field(\
-        description="Keycloak OAuth client secret",\
-        default=None,\
-    )\
-    KEYCLOAK_ISSUER_URL: Optional[str] = Field(\
-        description="Keycloak issuer url, e.g. http://localhost:8080/realms/dify",\
-        default=None,\
-    )' api/configs/feature/__init__.py
-    echo "✅ Added Keycloak configuration"
-else
-    echo "✅ Keycloak configuration already exists"
+    echo "❌ Error: Failed to add Keycloak configuration. Verification failed."
+    exit 1
 fi
 
 echo "📝 Step 2: Adding KeycloakOAuth class to api/libs/oauth.py..."
