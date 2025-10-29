@@ -20,7 +20,7 @@ echo "📝 Step 1: Adding Keycloak configuration to api/configs/feature/__init__
 # Add Keycloak configuration after Google OAuth settings
 if ! grep -q "KEYCLOAK_CLIENT_ID" api/configs/feature/__init__.py; then
     # Find the line with GOOGLE_CLIENT_SECRET and add Keycloak config after it
-    sed -i '/GOOGLE_CLIENT_SECRET.*default=None/a\
+    sed -i.bak '/GOOGLE_CLIENT_SECRET.*default=None/a\
 \
     # Keycloak (OIDC/OAuth2) optional settings for console social login\
     KEYCLOAK_CLIENT_ID: Optional[str] = Field(\
@@ -44,7 +44,17 @@ echo "📝 Step 2: Adding KeycloakOAuth class to api/libs/oauth.py..."
 
 # Add imports if not present
 if ! grep -q "import hashlib" api/libs/oauth.py; then
-    sed -i '1a import hashlib\nimport base64\nimport secrets\nimport json' api/libs/oauth.py
+    python3 -c "
+import sys
+with open('api/libs/oauth.py', 'r') as f:
+    lines = f.readlines()
+    imports = ['import hashlib\n', 'import base64\n', 'import secrets\n', 'import json\n']
+    for imp in imports:
+        if imp not in lines[0]:
+            lines.insert(0, imp)
+    with open('api/libs/oauth.py', 'w') as f:
+        f.writelines(lines)
+"
     echo "✅ Added required imports"
 fi
 
@@ -138,19 +148,19 @@ echo "📝 Step 3: Updating OAuth controller api/controllers/console/auth/oauth.
 
 # Add imports for Keycloak and required modules
 if ! grep -q "KeycloakOAuth" api/controllers/console/auth/oauth.py; then
-    sed -i 's/from libs.oauth import GitHubOAuth, GoogleOAuth, OAuthUserInfo/from libs.oauth import GitHubOAuth, GoogleOAuth, OAuthUserInfo, KeycloakOAuth/' api/controllers/console/auth/oauth.py
+    sed -i.bak 's/from libs.oauth import GitHubOAuth, GoogleOAuth, OAuthUserInfo/from libs.oauth import GitHubOAuth, GoogleOAuth, OAuthUserInfo, KeycloakOAuth/' api/controllers/console/auth/oauth.py
     echo "✅ Added KeycloakOAuth import"
 fi
 
 if ! grep -q "import base64" api/controllers/console/auth/oauth.py; then
-    sed -i '1a import base64\nimport json' api/controllers/console/auth/oauth.py
+    sed -i.bak '1a import base64\nimport json' api/controllers/console/auth/oauth.py
     echo "✅ Added required imports to OAuth controller"
 fi
 
 # Add Keycloak provider to get_oauth_providers function
 if ! grep -q "keycloak_oauth" api/controllers/console/auth/oauth.py; then
     # Find the line with github/google providers and add keycloak after it
-    sed -i '/OAUTH_PROVIDERS = {"github": github_oauth, "google": google_oauth}/c\
+    sed -i.bak '/OAUTH_PROVIDERS = {"github": github_oauth, "google": google_oauth}/c\
         # Keycloak settings are optional; present only when fully configured\
         if (\
             getattr(dify_config, "KEYCLOAK_CLIENT_ID", None)\
@@ -173,7 +183,7 @@ fi
 # Add OAuth providers API endpoint
 if ! grep -q "OAuthProvidersApi" api/controllers/console/auth/oauth.py; then
     # Find the OAuthCallback class and add OAuthProvidersApi before it
-    sed -i '/class OAuthCallback(Resource):/i\
+    sed -i.bak '/class OAuthCallback(Resource):/i\
 class OAuthProvidersApi(Resource):\
     """Resource for listing available OAuth providers."""\
 \
@@ -191,7 +201,7 @@ fi
 # Add PKCE support in callback handling
 if ! grep -q "code_verifier" api/controllers/console/auth/oauth.py; then
     # Add PKCE handling in OAuthCallback
-    sed -i '/state = request.args.get("state")/a\
+    sed -i.bak '/state = request.args.get("state")/a\
         invite_token = None\
 \
         # Parse state parameter for Keycloak PKCE support\
@@ -212,7 +222,7 @@ fi
 
 # Register OAuth providers API endpoint
 if ! grep -q 'api.add_resource(OAuthProvidersApi, "/oauth/providers")' api/controllers/console/auth/oauth.py; then
-    sed -i '/api\.add_resource(OAuthLogin, "\/oauth\/login\/<provider>")/i\
+    sed -i.bak '/api\.add_resource(OAuthLogin, "\/oauth\/login\/<provider>")/i\
 api.add_resource(OAuthProvidersApi, "/oauth/providers")' api/controllers/console/auth/oauth.py
     echo "✅ Registered OAuth providers API endpoint"
 fi
@@ -221,7 +231,7 @@ echo "📝 Step 4: Adding SSO environment variables to docker/docker-compose.yam
 
 # Add SSO environment variables to docker-compose.yaml
 if ! grep -q "KEYCLOAK_CLIENT_ID" docker/docker-compose.yaml; then
-    sed -i '/NOTION_INTERNAL_SECRET: \${NOTION_INTERNAL_SECRET:-}/a\
+    sed -i.bak '/NOTION_INTERNAL_SECRET: \${NOTION_INTERNAL_SECRET:-}/a\
   # SSO & OAuth Settings\
   ENABLE_SOCIAL_OAUTH_LOGIN: ${ENABLE_SOCIAL_OAUTH_LOGIN:-false}\
   GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}\
@@ -240,20 +250,118 @@ echo "📝 Step 5: Updating frontend SSO display text..."
 
 # Update frontend to show "SSO" instead of "Keycloak" 
 if [ -f "web/app/signin/components/social-auth.tsx" ]; then
-    # Only attempt replacements if the original content exists
-    if grep -q "withKeycloak\|bg-blue-600.*KC" web/app/signin/components/social-auth.tsx; then
-        # Change the button text from Keycloak to SSO
-        sed -i 's/withKeycloak/withSSO/g' web/app/signin/components/social-auth.tsx
+    # Use Python to handle the file modification properly
+    python3 << 'PYTHON_SCRIPT'
+import re
+import sys
+
+file_path = "web/app/signin/components/social-auth.tsx"
+
+try:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Check if SSO/Keycloak provider block already exists
+    if 'providers?.keycloak' in content or 'providers.keycloak' in content:
+        # Update existing Keycloak references to SSO (if needed)
+        if 'RiUserLine' not in content:
+            # Add RiUserLine import if not present
+            if 'from \'@remixicon/react\'' not in content:
+                content = re.sub(
+                    r'(import.*from \'react-i18next\')',
+                    r'\1\nimport { RiUserLine } from \'@remixicon/react\'',
+                    content
+                )
+            # Replace old SSO icon with RiUserLine
+            content = re.sub(
+                r'<span className="mr-2 h-5 w-5 flex items-center justify-center bg-indigo-600 text-white text-xs font-bold rounded">\s*SSO\s*</span>',
+                '<RiUserLine className="mr-2 h-5 w-5 text-indigo-600" />',
+                content
+            )
+            print("✅ Updated SSO icon to RiUserLine")
+        else:
+            print("✅ SSO icon already using RiUserLine")
+    else:
+        # Add RiUserLine import if not present
+        if 'from \'@remixicon/react\'' not in content:
+            content = re.sub(
+                r'(import.*from \'react-i18next\')',
+                r'\1\nimport { RiUserLine } from \'@remixicon/react\'',
+                content
+            )
         
-        # Change the icon color and text (escape special characters properly)
-        sed -i 's/bg-blue-600 text-white text-xs font-bold rounded/bg-indigo-600 text-white text-xs font-bold rounded/g' web/app/signin/components/social-auth.tsx
-        sed -i 's/KC/SSO/g' web/app/signin/components/social-auth.tsx
-        echo "✅ Updated frontend SSO display text"
-    else
-        echo "✅ Frontend SSO display already updated or no Keycloak content found"
+        # Add providers prop to the component type if not already present
+        if 'providers?' not in content:
+            content = re.sub(
+                r'(type SocialAuthProps = \{[^\n]*)',
+                r'\1\n  providers?: any',
+                content
+            )
+        
+        # Add SSO provider block after Google OAuth but before the closing tags
+        sso_block = '''    {props.providers?.keycloak && (
+      <div className='w-full'>
+        <a href={getOAuthLink('/oauth/login/keycloak')}>
+          <Button
+            disabled={props.disabled}
+            className='w-full'
+          >
+            <>
+              <RiUserLine className="mr-2 h-5 w-5 text-indigo-600" />
+              <span className="truncate leading-normal">{t('login.withSSO')}</span>
+            </>
+          </Button>
+        </a>
+      </div>
+    )}
+'''
+        
+        # Insert before the closing </> tags
+        content = content.replace(
+            '  </>\n}',
+            f'  </>\n{sso_block}\n}'
+        )
+        
+        print("✅ Added SSO provider block to frontend")
+    
+    # Write back to file
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+except Exception as e:
+    print(f"⚠️  Error updating frontend: {e}")
+    sys.exit(1)
+PYTHON_SCRIPT
+
+    # Also update normal-form.tsx to pass providers to SocialAuth
+    if [ -f "web/app/signin/normal-form.tsx" ]; then
+        python3 << 'PYTHON_SCRIPT2'
+import re
+import sys
+
+file_path = "web/app/signin/normal-form.tsx"
+
+try:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Check if providers are already being fetched and passed
+    if 'providers' in content and 'SocialAuth' in content:
+        # Check if providers are passed to SocialAuth
+        if 'providers=' in content or 'providers: ' in content:
+            print("✅ Providers already being passed to SocialAuth")
+        else:
+            print("⚠️  Providers defined but not passed to SocialAuth - manual update may be needed")
+    else:
+        print("⚠️  No providers handling found in normal-form.tsx - manual update may be needed")
+        
+except Exception as e:
+    print(f"⚠️  Error checking normal-form.tsx: {e}")
+
+PYTHON_SCRIPT2
     fi
 else
-    echo "⚠️  Frontend component not found, skipping display text update"
+    echo "⚠️  Frontend component not found at web/app/signin/components/social-auth.tsx"
 fi
 
 echo "📝 Step 6: Creating .env file with SSO configuration..."
@@ -289,7 +397,8 @@ echo "  ✅ Added KeycloakOAuth class with PKCE support"
 echo "  ✅ Updated OAuth controller with Keycloak integration"
 echo "  ✅ Added OAuth providers API endpoint"
 echo "  ✅ Updated docker-compose.yaml with SSO environment variables"
-echo "  ✅ Updated frontend to display 'SSO' instead of 'Keycloak'"
+echo "  ✅ Updated frontend to display SSO button with user icon (RiUserLine)"
+echo "  ✅ Added conditional rendering for OAuth providers"
 echo "  ✅ Created .env file with default SSO configuration"
 echo ""
 echo "🚀 Ready to build Docker images!"

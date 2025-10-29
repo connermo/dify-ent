@@ -20,8 +20,10 @@ on:
     paths:
       - '.github/workflows/sync-dify.yml'
       - 'dify/api/**'
+      - 'dify/web/**'
       - 'dify/docker/docker-compose.yaml'
       - '*.patch'
+      - 'patches/**'
       - 'scripts/**'
       - 'LAST_UPSTREAM_RELEASE'
 
@@ -31,6 +33,7 @@ env:
   DOCKER_REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/dify
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME || github.repository_owner }}
 
 jobs:
   sync-and-build:
@@ -242,13 +245,20 @@ jobs:
         with:
           platforms: ${{ env.BUILD_PLATFORMS }}
 
-      - name: Login to Container Registry
+      - name: Login to GitHub Container Registry
         if: steps.check-updates.outputs.updates == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.DOCKER_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        if: steps.check-updates.outputs.updates == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push API image
         if: steps.check-updates.outputs.updates == 'true'
@@ -260,6 +270,8 @@ jobs:
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ env.UPSTREAM_RELEASE_TAG }}
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
+            ${{ env.DOCKERHUB_USERNAME }}/dify-api:${{ env.UPSTREAM_RELEASE_TAG }}
+            ${{ env.DOCKERHUB_USERNAME }}/dify-api:latest
           provenance: false
           cache-from: |
             type=gha
@@ -281,6 +293,8 @@ jobs:
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:${{ env.UPSTREAM_RELEASE_TAG }}
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest
+            ${{ env.DOCKERHUB_USERNAME }}/dify-web:${{ env.UPSTREAM_RELEASE_TAG }}
+            ${{ env.DOCKERHUB_USERNAME }}/dify-web:latest
           provenance: false
           cache-from: |
             type=gha
@@ -302,6 +316,8 @@ jobs:
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ env.UPSTREAM_RELEASE_TAG }}
             ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest
+            ${{ env.DOCKERHUB_USERNAME }}/dify-worker:${{ env.UPSTREAM_RELEASE_TAG }}
+            ${{ env.DOCKERHUB_USERNAME }}/dify-worker:latest
           provenance: false
           cache-from: |
             type=gha
@@ -336,9 +352,13 @@ jobs:
           }
           
           # Make all packages public
+          # Make GitHub Container Registry packages public
           make_package_public "dify-api"
           make_package_public "dify-web" 
           make_package_public "dify-worker"
+          
+          echo "✅ GitHub Container Registry packages set to public"
+          echo "✅ Docker Hub images pushed to ${{ env.DOCKERHUB_USERNAME }}/dify-{api,web,worker}"
           
           echo "✅ Package visibility updated"
 
@@ -352,15 +372,19 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "🚀 Sync from upstream ${{ env.UPSTREAM_REPO }} ${{ env.UPSTREAM_RELEASE_TAG }}
+            git commit -m "🚀 Sync from upstream ${{ env.UPSTREAM_RELEASE_TAG }}
             
             - ✅ Updated dify/ to release ${{ env.UPSTREAM_RELEASE_TAG }}
-            - ✅ Applied Keycloak OAuth integration automatically
+            - ✅ Applied Keycloak OAuth integration (SSO) automatically
+            - ✅ Added OAuth providers API endpoint
+            - ✅ Updated frontend with SSO login button (RiUserLine icon)
             - ✅ Updated docker-compose.yaml with SSO environment variables
             - ✅ Built and pushed Docker images with latest upstream changes
             
-            🔗 Upstream release: ${{ env.UPSTREAM_RELEASE_TAG }}
-            📦 Images: ghcr.io/${{ github.repository_owner }}/dify-{api,web,worker}:${{ env.UPSTREAM_RELEASE_TAG }}"
+            🔗 Upstream: ${{ env.UPSTREAM_REPO }}@${{ env.UPSTREAM_RELEASE_TAG }}
+            📦 Images: 
+              - ghcr.io/${{ github.repository_owner }}/dify-{api,web,worker}:${{ env.UPSTREAM_RELEASE_TAG }}
+              - docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-{api,web,worker}:${{ env.UPSTREAM_RELEASE_TAG }}"
             git push origin main
           fi
 
@@ -385,16 +409,23 @@ jobs:
               
               ### 🔗 Docker Images (Updated)
               
+              #### GitHub Container Registry
               - **API**: \`ghcr.io/${{ github.repository_owner }}/dify-api:latest\`
               - **Web**: \`ghcr.io/${{ github.repository_owner }}/dify-web:latest\`
               - **Worker**: \`ghcr.io/${{ github.repository_owner }}/dify-worker:latest\`
               
+              #### Docker Hub
+              - **API**: \`docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-api:latest\`
+              - **Web**: \`docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-web:latest\`
+              - **Worker**: \`docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-worker:latest\`
+              
               ### 📋 Latest Changes
               
-              - ✅ Disable conversation logging feature added
+              - ✅ SSO integration with Keycloak OAuth2/OIDC
+              - ✅ Dynamic OAuth providers API
+              - ✅ User-friendly SSO login button with icon
+              - ✅ PKCE security support
               - ✅ Synced from upstream: langgenius/dify@main
-              - ✅ Keycloak OAuth integration maintained
-              - ✅ Environment variables updated
               
               Last updated: $(date +'%Y-%m-%d %H:%M UTC')"
           else
@@ -405,16 +436,31 @@ jobs:
               
               This release includes:
               - Latest Dify updates from upstream repository
-              - Keycloak OAuth integration patch applied
-              - **Disable conversation logging patch applied** 🔒
-              - Updated docker-compose.yaml with Keycloak environment variables
-              - Fresh Docker images built from latest upstream code
+              - ✅ Keycloak OAuth2/OIDC SSO integration
+              - ✅ OAuth providers API endpoint
+              - ✅ SSO login button with user icon (RiUserLine)
+              - ✅ PKCE (Proof Key for Code Exchange) support
+              - ✅ Updated docker-compose.yaml with SSO environment variables
+              - ✅ Fresh Docker images built from latest upstream code
               
               ### 🔗 Docker Images
               
+              #### GitHub Container Registry
               - **API**: \`ghcr.io/${{ github.repository_owner }}/dify-api:latest\`
               - **Web**: \`ghcr.io/${{ github.repository_owner }}/dify-web:latest\`
-              - **Worker**: \`ghcr.io/${{ github.repository_owner }}/dify-worker:latest\`"
+              - **Worker**: \`ghcr.io/${{ github.repository_owner }}/dify-worker:latest\`
+              
+              #### Docker Hub
+              - **API**: \`docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-api:latest\`
+              - **Web**: \`docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-web:latest\`
+              - **Worker**: \`docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-worker:latest\`
+              
+              ### 📋 Features
+              
+              - ✅ Keycloak OAuth2/OIDC SSO integration
+              - ✅ Dynamic OAuth providers API
+              - ✅ User-friendly SSO login button with icon
+              - ✅ PKCE security support"
           fi
 
       - name: Update README with latest info
@@ -476,12 +522,22 @@ jobs:
           
           if [ "${{ steps.check-updates.outputs.updates }}" = "true" ]; then
             echo "### 📦 Docker Images Built" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### GitHub Container Registry" >> $GITHUB_STEP_SUMMARY
             echo "- **API**: \`${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest\`" >> $GITHUB_STEP_SUMMARY
             echo "- **Web**: \`${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-web:latest\`" >> $GITHUB_STEP_SUMMARY
             echo "- **Worker**: \`${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}-worker:latest\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### Docker Hub" >> $GITHUB_STEP_SUMMARY
+            echo "- **API**: \`docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-api:latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web**: \`docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-web:latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Worker**: \`docker.io/${{ env.DOCKERHUB_USERNAME }}/dify-worker:latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🔧 Changes Applied" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Keycloak OAuth integration patch" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Keycloak OAuth2/OIDC SSO integration" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ OAuth providers API endpoint" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ SSO login button with user icon" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ PKCE security support" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Environment variables updated" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Docker images rebuilt" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Release created" >> $GITHUB_STEP_SUMMARY

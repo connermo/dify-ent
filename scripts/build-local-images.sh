@@ -10,7 +10,7 @@ REGISTRY_PREFIX="langgenius"  # 使用官方镜像的 registry
 VERSION="latest"
 BUILD_PLATFORMS="linux/amd64"  # Change to "linux/amd64,linux/arm64" for multi-arch
 PARALLEL_BUILD=false
-CURRENT_RELEASE_VERSION="1.7.2"  # 当前docker-compose中使用的版本
+CURRENT_RELEASE_VERSION="1.9.2"  # 当前docker-compose中使用的版本
 
 # Cache configuration
 ENABLE_SMART_CACHE=true

@@ -51,6 +51,28 @@ grep -n "_query.*mapped_column" api/models/model.py
 grep -n "def _is_encryption_enabled" api/models/model.py
 ```
 
+## SSO 集成补丁（Keycloak）
+
+### 补丁文件
+
+完整的 SSO 集成补丁位于 `patches/` 目录：
+
+1. **`sso-config-feature.patch`** - 配置文件补丁
+2. **`sso-libs-oauth.patch`** - OAuth 库补丁（KeycloakOAuth 类）
+3. **`sso-controller-oauth.patch`** - OAuth 控制器补丁
+4. **`sso-web-social-auth.patch`** - 前端社交登录组件补丁
+5. **`sso-web-normal-form.patch`** - 前端登录表单补丁
+6. **`sso-docker-compose.patch`** - Docker Compose 配置补丁
+
+### 使用方法
+
+推荐使用自动化脚本：
+```bash
+./scripts/apply-sso-integration.sh
+```
+
+详细信息请参考：[SSO_INTEGRATION_README.md](./SSO_INTEGRATION_README.md)
+
 ## 其他补丁
 
 - **`clear-logs-final-clean.patch`** - 日志清理功能补丁

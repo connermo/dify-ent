@@ -1,0 +1,82 @@
+diff --git a/api/controllers/console/auth/oauth.py b/api/controllers/console/auth/oauth.py
+index 29653b3..7a9561f 100644
+--- a/api/controllers/console/auth/oauth.py
++++ b/api/controllers/console/auth/oauth.py
+@@ -1,3 +1,5 @@
++import base64
++import json
+ import logging
+ 
+ import httpx
+@@ -13,7 +15,7 @@ from events.tenant_event import tenant_was_created
+ from extensions.ext_database import db
+ from libs.datetime_utils import naive_utc_now
+ from libs.helper import extract_remote_ip
+-from libs.oauth import GitHubOAuth, GoogleOAuth, OAuthUserInfo
++from libs.oauth import GitHubOAuth, GoogleOAuth, OAuthUserInfo, KeycloakOAuth
+ from libs.token import (
+     set_access_token_to_cookie,
+     set_csrf_token_to_cookie,
+@@ -50,7 +52,22 @@ def get_oauth_providers():
+                 redirect_uri=dify_config.CONSOLE_API_URL + "/console/api/oauth/authorize/google",
+             )
+ 
+-        OAUTH_PROVIDERS = {"github": github_oauth, "google": google_oauth}
++        # Keycloak settings are optional; present only when fully configured
++        if (
++            getattr(dify_config, "KEYCLOAK_CLIENT_ID", None)
++            and getattr(dify_config, "KEYCLOAK_CLIENT_SECRET", None)
++            and getattr(dify_config, "KEYCLOAK_ISSUER_URL", None)
++        ):
++            keycloak_oauth = KeycloakOAuth(
++                client_id=dify_config.KEYCLOAK_CLIENT_ID,
++                client_secret=dify_config.KEYCLOAK_CLIENT_SECRET,
++                redirect_uri=dify_config.CONSOLE_API_URL + "/console/api/oauth/authorize/keycloak",
++                issuer_url=dify_config.KEYCLOAK_ISSUER_URL,
++            )
++        else:
++            keycloak_oauth = None
++
++        OAUTH_PROVIDERS = {"github": github_oauth, "google": google_oauth, "keycloak": keycloak_oauth}
+         return OAUTH_PROVIDERS
+ 
+ 
+@@ -73,6 +90,17 @@ class OAuthLogin(Resource):
+         return redirect(auth_url)
+ 
+ 
++@console_ns.route("/oauth/providers")
++class OAuthProvidersApi(Resource):
++    """Resource for listing available OAuth providers."""
++
++    def get(self):
++        """Get the list of available OAuth providers."""
++        OAUTH_PROVIDERS = get_oauth_providers()
++        available_providers = {k: v is not None for k, v in OAUTH_PROVIDERS.items()}
++        return {"providers": available_providers}
++
++
+ @console_ns.route("/oauth/authorize/<provider>")
+ class OAuthCallback(Resource):
+     @api.doc("oauth_callback")
+@@ -96,7 +124,19 @@ class OAuthCallback(Resource):
+         code = request.args.get("code")
+         state = request.args.get("state")
+         invite_token = None
+-        if state:
++
++        # Parse state parameter for Keycloak PKCE support
++        if state and provider == "keycloak":
++            try:
++                state_data = json.loads(base64.urlsafe_b64decode(state).decode())
++                code_verifier = state_data.get("code_verifier")
++                invite_token = state_data.get("invite_token")
++                if code_verifier:
++                    oauth_provider.set_code_verifier(code_verifier)
++            except Exception:
++                # Fallback to treating state as invite_token
++                invite_token = state
++        elif state:
+             invite_token = state
+ 
+         if not code:
