@@ -319,7 +319,7 @@ try:
         # Insert before the closing </> tags
         content = content.replace(
             '  </>\n}',
-            f'  </>\n{sso_block}\n}'
+            '  </>\n' + sso_block + '\n}'
         )
         
         print("✅ Added SSO provider block to frontend")
