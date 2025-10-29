@@ -239,7 +239,62 @@ jobs:
         if: steps.check-updates.outputs.updates == 'true'
         run: |
           # Apply SSO integration script
-          ./scripts/apply-sso-integration.sh
+          echo "🚀 Applying SSO integration patches..."
+          echo "Current directory: $(pwd)"
+          echo "Checking dify directory structure:"
+          ls -la dify/ | head -10
+          echo ""
+          
+          # Run the script and capture output
+          if ! ./scripts/apply-sso-integration.sh; then
+            echo "❌ Error: SSO integration script failed!"
+            exit 1
+          fi
+          
+          echo ""
+          echo "🔍 Verifying SSO patches were applied..."
+          
+          # Verify Keycloak config
+          if ! grep -q "KEYCLOAK_CLIENT_ID" dify/api/configs/feature/__init__.py; then
+            echo "❌ Error: Keycloak config not found in feature/__init__.py"
+            echo "File content (last 20 lines):"
+            tail -20 dify/api/configs/feature/__init__.py
+            exit 1
+          fi
+          echo "✅ Keycloak config found in feature/__init__.py"
+          
+          # Verify frontend SSO icon
+          if ! grep -q "RiUserLine" dify/web/app/signin/components/social-auth.tsx; then
+            echo "❌ Error: RiUserLine import not found in social-auth.tsx"
+            echo "File content (first 10 lines):"
+            head -10 dify/web/app/signin/components/social-auth.tsx
+            exit 1
+          fi
+          echo "✅ RiUserLine import found in social-auth.tsx"
+          
+          # Verify OAuth providers API
+          if ! grep -q "OAuthProvidersApi" dify/api/controllers/console/auth/oauth.py; then
+            echo "❌ Error: OAuthProvidersApi not found in oauth.py"
+            echo "File content (last 30 lines):"
+            tail -30 dify/api/controllers/console/auth/oauth.py
+            exit 1
+          fi
+          echo "✅ OAuthProvidersApi found in oauth.py"
+          
+          # Verify KeycloakOAuth class
+          if ! grep -q "KeycloakOAuth" dify/api/libs/oauth.py; then
+            echo "❌ Error: KeycloakOAuth class not found in libs/oauth.py"
+            exit 1
+          fi
+          echo "✅ KeycloakOAuth class found in libs/oauth.py"
+          
+          echo ""
+          echo "✅ All SSO patches verified successfully!"
+          echo "📋 Summary:"
+          echo "  - Keycloak configuration: ✅"
+          echo "  - Frontend SSO button: ✅"
+          echo "  - OAuth providers API: ✅"
+          echo "  - KeycloakOAuth class: ✅"
           
           # Also apply other patches if they exist
           if [ -f "paraview-sso-integration.patch" ]; then
