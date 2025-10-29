@@ -63,9 +63,15 @@ try:
     found = False
     
     # Try to find the complete GOOGLE_CLIENT_SECRET field definition
-    # Match: GOOGLE_CLIENT_SECRET ... Field(... default=None ...) with proper indentation
-    google_secret_pattern = r'(GOOGLE_CLIENT_SECRET\s*:\s*Optional\[str\]\s*=\s*Field\([^\)]*default=None[^\)]*\)\s*\n)'
-    match = re.search(google_secret_pattern, content, re.MULTILINE)
+    # Handle both Optional[str] and str | None formats
+    # Pattern 1: Optional[str] format
+    google_secret_pattern1 = r'(GOOGLE_CLIENT_SECRET\s*:\s*Optional\[str\]\s*=\s*Field\([^\)]*default=None[^\)]*\)\s*\n)'
+    # Pattern 2: str | None format (newer Python syntax)
+    google_secret_pattern2 = r'(GOOGLE_CLIENT_SECRET\s*:\s*str\s*\|\s*None\s*=\s*Field\([^\)]*default=None[^\)]*\)\s*\n)'
+    
+    match = re.search(google_secret_pattern1, content, re.MULTILINE)
+    if not match:
+        match = re.search(google_secret_pattern2, content, re.MULTILINE)
     
     if match:
         # Insert after the matched field
@@ -73,11 +79,17 @@ try:
         content = content[:insert_pos] + keycloak_config + '\n' + content[insert_pos:]
         found = True
     else:
-        # Try alternative: find GOOGLE_CLIENT_SECRET and Field on separate lines
-        google_secret_pattern2 = r'(GOOGLE_CLIENT_SECRET\s*:\s*Optional\[str\]\s*=\s*Field\([^)]*\n[^)]*\n[^)]*default=None[^)]*\n[^)]*\)\s*\n)'
-        match2 = re.search(google_secret_pattern2, content, re.MULTILINE | re.DOTALL)
-        if match2:
-            insert_pos = match2.end()
+        # Try multi-line Field() definitions with Optional[str]
+        google_secret_pattern3 = r'(GOOGLE_CLIENT_SECRET\s*:\s*Optional\[str\]\s*=\s*Field\([^)]*\n[^)]*\n[^)]*default=None[^)]*\n[^)]*\)\s*\n)'
+        match3 = re.search(google_secret_pattern3, content, re.MULTILINE | re.DOTALL)
+        
+        if not match3:
+            # Try multi-line with str | None format
+            google_secret_pattern4 = r'(GOOGLE_CLIENT_SECRET\s*:\s*str\s*\|\s*None\s*=\s*Field\([^)]*\n[^)]*\n[^)]*default=None[^)]*\n[^)]*\)\s*\n)'
+            match3 = re.search(google_secret_pattern4, content, re.MULTILINE | re.DOTALL)
+        
+        if match3:
+            insert_pos = match3.end()
             content = content[:insert_pos] + keycloak_config + '\n' + content[insert_pos:]
             found = True
     
