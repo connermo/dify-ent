@@ -366,8 +366,8 @@ jobs:
           echo "  - KeycloakOAuth class: ✅"
 
           # Create marker files with patch hash to bust Docker cache
-          echo "${{ steps.patches-hash.outputs.patches_hash }}" > api/.sso-patches-version
-          echo "${{ steps.patches-hash.outputs.patches_hash }}" > web/.sso-patches-version
+          echo "${{ steps.patches-hash.outputs.patches_hash }}" > dify/api/.sso-patches-version
+          echo "${{ steps.patches-hash.outputs.patches_hash }}" > dify/web/.sso-patches-version
           echo "📝 Created cache busting marker files with hash: ${{ steps.patches-hash.outputs.patches_hash }}"
 
       - name: Setup Docker Buildx
